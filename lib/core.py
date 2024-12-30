@@ -8,6 +8,7 @@ import numpy.typing as npt
 
 
 element_tensor_functions = {}
+NODES_WIDTH = 3
 
 
 class ElementType(Enum):
@@ -645,16 +646,17 @@ class Mesh:
     Parameters
     ----------
     nodes : npt.ArrayLike[np.float32]
-        Nx6 array where N is the number of nodes (control points). Each row displacemnt of the node (3 tranlational + 3 rotational).
-        The nodes array will be flattened into a nuetral displacement vector.
+        Nx3 array where N is the number of nodes (control points). Most rows represent a node with 3 translational degrees of freedom (a point in space).
+        Some [virtual] nodes will exist to represent 3 rotational degrees of freedom.
+        The nodes array will be flattened into a neutral displacement vector.
 
     elements : sequence[sequence[int]]
-        NxX array where each row is an index array refrencing the nodes in the mesh.
+        NxX array where each row is an index array referencing the nodes in the mesh.
         N is the number of elements the mesh and X is variable length depending on the cell type.
 
     element_type : npt.ArrayLike[ElementType]
         Nx0 array of element types. See the ElementType enum for possible values.
-        N is a divisor of the number of elements in the mesh. This array will be repeated untill it matches the number of elements.
+        N is a divisor of the number of elements in the mesh. This array will be repeated until it matches the number of elements.
 
     element_properties : sequence[sequence[np.float32]]
         Sequence of sequences of properties for each element. Each sub-sequence contains the properties needed by the stiffness matrix function.
@@ -663,26 +665,26 @@ class Mesh:
         N is a divisor of the number of elements in the mesh. This array will be repeated until it matches the number of elements.
 
     constraints_vector : npt.ArrayLike[np.bool]
-            Nx0 array representing the constrained degrees of freedom per node. A node is considered free if the value is False.
-            The linear system of equations will be reduced to only include free degrees of freedom.
-            N is a divisor of the number of elements in the mesh. This array will be repeated until it matches the number of elements.
-            A second constraints vector will be constructed from the elements + element_type arrays and will be OR'd against this.
-            In the context of FEA simulation, the constraints vector will be used with np.where and np.ix_ to downselect the stiffness matrix.
+        Nx0 array representing the constrained degrees of freedom per node. A node is considered free if the value is False.
+        The linear system of equations will be reduced to only include free degrees of freedom.
+        N is a divisor of the number of elements in the mesh. This array will be repeated until it matches the number of elements.
+        A second constraints vector will be constructed from the elements + element_type arrays and will be OR'd against this.
+        In the context of FEA simulation, the constraints vector will be used with np.where and np.ix_ to downselect the stiffness matrix.
 
-            - Locked degrees of freedom: These are the DOFs that are constrained and cannot move. They are represented by True in the constraints vector.
-            - Free degrees of freedom: These are the DOFs that are not constrained and can move freely. They are represented by False in the constraints vector.
-            - Independent degrees of freedom: These are the DOFs that remain after applying constraints and are used in the reduced system of equations.
-            - Dependent degrees of freedom: These are the DOFs that are constrained and their values depend on the independent DOFs.
+        - Locked degrees of freedom: These are the DOFs that are constrained and cannot move. They are represented by True in the constraints vector.
+        - Free degrees of freedom: These are the DOFs that are not constrained and can move freely. They are represented by False in the constraints vector.
+        - Independent degrees of freedom: These are the DOFs that remain after applying constraints and are used in the reduced system of equations.
+        - Dependent degrees of freedom: These are the DOFs that are constrained and their values depend on the independent DOFs.
 
     constraints_matrix : npt.NDArray, optional
-            Matrix to map from a complete displacement vector (u) to a partial displacement vector, assuming linear mapping.
-            In the solver, this matrix will be used to reduce the displacement vector to only include independent degrees of freedom.
-            A congruence transformation will be applied to the global stiffness matrix to match the reduced displacement vector.
-            This will be achieved using a congruence transformation: constraints_matrix.T @ stiffness_matrix @ constraints_matrix.
+        Matrix to map from a complete displacement vector (u) to a partial displacement vector, assuming linear mapping.
+        In the solver, this matrix will be used to reduce the displacement vector to only include independent degrees of freedom.
+        A congruence transformation will be applied to the global stiffness matrix to match the reduced displacement vector.
+        This will be achieved using a congruence transformation: constraints_matrix.T @ stiffness_matrix @ constraints_matrix.
 
     forces : npt.ArrayLike[np.float32]
         Nx6 array of force vectors corresponding to each node (3 translational + 3 rotational).
-        N is a divisor of the number of elements in the mesh. This array will be repeated untill it matches the number of elements.
+        N is a divisor of the number of elements in the mesh. This array will be repeated until it matches the number of elements.
 
     displacement_vector : npt.ArrayLike[np.float32]
         Displacement vector for each node. The total displacement of the node is the neutral displacement + the displacement vector.
@@ -719,9 +721,9 @@ class Mesh:
     num_elements = None
 
     def __post_init__(self):
-        self.nodes = np.asarray(self.nodes, dtype=np.float32).reshape(-1, 6)
+        self.nodes = np.asarray(self.nodes, dtype=np.float32).reshape(-1, NODES_WIDTH)
         self.num_nodes = len(self.nodes)
-        self.num_dofs = self.num_nodes * 6
+        self.num_dofs = self.nodes.size
         self.num_elements = len(self.elements)
 
         if self.num_elements % len(self.element_type) != 0:
@@ -763,7 +765,7 @@ class Mesh:
             self.forces = np.zeros((self.nodes.shape), dtype=np.float32)
         else:
             self.forces = self._normalize_repeat_array(
-                self.forces, "forces", np.float32, (-1, 6)
+                self.forces, "forces", np.float32, (-1, NODES_WIDTH)
             )
 
         if self.displacement_vector is None:
@@ -807,7 +809,11 @@ class Mesh:
             Ke, _, _ = element_tensor
 
             dof_indices = np.array(
-                [node_idx * 6 + j for node_idx in element for j in range(6)]
+                [
+                    node_idx * NODES_WIDTH + j
+                    for node_idx in element
+                    for j in range(NODES_WIDTH)
+                ]
             )
             idx = np.ix_(dof_indices, dof_indices)
             self.Kg[idx] += Ke
@@ -821,7 +827,7 @@ class Mesh:
         u = np.linalg.solve(K, f)
 
         # Reconstruct full displacement vector
-        displacements = np.zeros_like(self.nodes).flatten()
+        displacements = np.zeros((self.num_dofs,), dtype=np.float32)
         displacements[free_dofs] = u
         displacements = displacements.reshape(self.nodes.shape)
 
@@ -895,7 +901,9 @@ class Mesh:
         cells = [[len(element), *element] for element in self.elements]
         cells = [item for sublist in cells for item in sublist]
         cell_type = [cell_type_map[cell_type] for cell_type in self.element_type]
-        points = self.nodes[:, :3] + self.displacement_vector[:, :3] ** 100
+        points = (
+            self.nodes + self.displacement_vector**100
+        )  # TODO figure out a better way for amplifying displacements for rendering
 
         # Create the spatial reference
         grid = pv.UnstructuredGrid(cells, cell_type, points)
