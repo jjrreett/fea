@@ -1,3 +1,4 @@
+from doctest import debug
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
@@ -9,6 +10,21 @@ import numpy.typing as npt
 
 element_tensor_functions = {}
 NODES_WIDTH = 3
+DEBUG = False
+
+
+def np_print(name, ary):
+    print(name, ary.shape, ary, sep="\n")
+
+
+def debug_np_print(name, ary):
+    if DEBUG:
+        np_print(name, ary)
+
+
+def debug_print(*args, **kwargs):
+    if DEBUG:
+        print(*args, **kwargs)
 
 
 class ElementType(Enum):
@@ -799,7 +815,38 @@ class Mesh:
             idx = np.ix_(dof_indices, dof_indices)
             self.Kg[idx] += Ke
 
+    def compute_element_strain_stress(self):
+        self.element_strains = np.zeros((self.num_elements, 6), dtype=np.float32)
+        self.element_stresses = np.zeros((self.num_elements, 6), dtype=np.float32)
+        for i, element in enumerate(self.elements):
+            _, Be, CBe = self.element_tensors[i]
+            u = self.displacement_vector[element].flatten()
+            self.element_strains[i] = Be @ u
+            self.element_stresses[i] = CBe @ u
+
+    def compute_von_mises_stress(self):
+        if self.element_stresses is None:
+            raise ValueError("Element stresses have not been computed yet.")
+
+        self.von_mises_stress = np.zeros((self.num_elements,))
+
+        for i, stress in enumerate(self.element_stresses):
+            sigma_xx, sigma_yy, sigma_zz, tau_xy, tau_xz, tau_yz = stress
+            von_mises = np.sqrt(
+                0.5
+                * (
+                    (sigma_xx - sigma_yy) ** 2
+                    + (sigma_yy - sigma_zz) ** 2
+                    + (sigma_zz - sigma_xx) ** 2
+                    + 6 * (tau_xy**2 + tau_xz**2 + tau_yz**2)
+                )
+            )
+            self.von_mises_stress[i] = von_mises
+
     def solve(self):
+        self.assemble_global_tensors()
+        debug_np_print("Mesh.Kg", self.Kg)
+
         free_dofs = np.where(self.constraints_vector.flatten() == 0)[0]
 
         K = self.Kg[np.ix_(free_dofs, free_dofs)]
@@ -810,23 +857,19 @@ class Mesh:
         # Reconstruct full displacement vector
         displacements = np.zeros((self.num_dofs,), dtype=np.float32)
         displacements[free_dofs] = u
-        displacements = displacements.reshape(self.nodes.shape)
+        self.displacement_vector = displacements.reshape(self.nodes.shape)
+        debug_np_print("Mesh.displacement_vector", self.displacement_vector)
 
         forces = (self.Kg @ displacements.flatten()).reshape(self.nodes.shape)
-        self.displacement_vector = displacements
         self.forces = forces
+        debug_np_print("Mesh.forces", self.forces)
 
-    def compute_element_strain_stress(self):
-        self.element_strains = []
-        self.element_stresses = []
-        for i, element in enumerate(self.elements):
-            _, Be, CBe = self.element_tensors[i]
-            u = self.displacement_vector[element].flatten()
-            element_strain = Be @ u
-            element_stress = CBe @ u
+        self.compute_element_strain_stress()
+        debug_np_print("Mesh.element_strains", self.element_strains)
+        debug_np_print("Mesh.element_stresses", self.element_stresses)
 
-            self.element_strains.append(element_strain)
-            self.element_stresses.append(element_stress)
+        self.compute_von_mises_stress()
+        debug_np_print("Mesh.von_mises_stress", self.von_mises_stress)
 
     def generate_pv_unstructured_mesh(self):
         import pyvista as pv
@@ -890,22 +933,3 @@ class Mesh:
         grid = pv.UnstructuredGrid(cells, cell_type, points)
 
         return grid
-
-    def compute_von_mises_stress(self):
-        if self.element_stresses is None:
-            raise ValueError("Element stresses have not been computed yet.")
-
-        self.von_mises_stress = np.zeros((self.num_elements,))
-
-        for i, stress in enumerate(self.element_stresses):
-            sigma_xx, sigma_yy, sigma_zz, tau_xy, tau_xz, tau_yz = stress
-            von_mises = np.sqrt(
-                0.5
-                * (
-                    (sigma_xx - sigma_yy) ** 2
-                    + (sigma_yy - sigma_zz) ** 2
-                    + (sigma_zz - sigma_xx) ** 2
-                    + 6 * (tau_xy**2 + tau_xz**2 + tau_yz**2)
-                )
-            )
-            self.von_mises_stress[i] = von_mises

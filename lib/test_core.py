@@ -4,6 +4,8 @@ import pyvista as pv
 
 np.set_printoptions(precision=3, linewidth=400, suppress=False)
 
+core.DEBUG = True
+
 
 def test_truss1():
     E = 10_000_000  # psi
@@ -29,13 +31,9 @@ def test_truss1():
         ],
     )
 
-    mesh.assemble_global_tensors()
-
     mesh.forces[1, 1] = force
 
     mesh.solve()
-    print("displacement_vector", mesh.displacement_vector, sep="\n")
-    print("forces", mesh.forces, sep="\n")
 
     assert np.allclose(
         mesh.forces,
@@ -48,17 +46,8 @@ def test_truss1():
         ),
     )
 
-    mesh.compute_element_strain_stress()
-
     expected_stress = force / A
     expected_displacement = expected_stress / E
-
-    print("strain", mesh.strain, sep="\n")
-    print("stress", mesh.element_stresses, sep="\n")
-
-    mesh.compute_von_mises_stress()
-    print("von_mises_stress", mesh.von_mises_stress, sep="\n")
-    # print("element_stress", mesh.element_stresses, sep="\n")
 
     assert np.allclose(
         mesh.displacement_vector[1, 1], expected_displacement
@@ -124,13 +113,9 @@ def test_truss():
         ],
     )
 
-    mesh.assemble_global_tensors()
-
     mesh.forces[1, 1] = -force
 
     mesh.solve()
-    print("displacement_vector", mesh.displacement_vector, sep="\n")
-    print("forces", mesh.forces, sep="\n")
 
     assert np.allclose(
         mesh.forces,
@@ -144,7 +129,7 @@ def test_truss():
         ),
     )
 
-    mesh.compute_element_strain_stress()
+    # mesh.compute_element_strain_stress()
 
     root2 = np.sqrt(2)
 
@@ -152,16 +137,6 @@ def test_truss():
     stress = force / 2 * root2 / A
     # the top element is in tension, the bottom element is in compression
     expected_stress = np.array([stress, stress])
-    # stress along x y axis (stress * normalized direction vectors)
-
-    # local_displacement = expected_stress_vector / E
-
-    mesh.compute_element_strain_stress()
-    print("element_strains", mesh.element_strains, sep="\n")
-    print("element_stresses", mesh.element_stresses, sep="\n")
-
-    mesh.compute_von_mises_stress()
-    print("von_mises_stress", mesh.von_mises_stress, sep="\n")
 
     assert np.allclose(
         mesh.von_mises_stress, expected_stress
@@ -235,16 +210,11 @@ def test_cantilever_truss():
         ],
     )
 
-    # Assemble global stiffness matrix
-    mesh.assemble_global_tensors()
-
     # Apply point load at Node 3
     mesh.forces[4, 1] = -force  # Load in the negative Y direction
 
     # Solve the system
     mesh.solve()
-    print("displacement_vector", mesh.displacement_vector, sep="\n")
-    print("forces", mesh.forces, sep="\n")
 
     # Assert the reaction forces are as expected at the fixed node
     # Reaction forces should balance the applied load
@@ -259,15 +229,6 @@ def test_cantilever_truss():
         atol=1e-3,  # Absolute tolerance
         rtol=1e-4,  # Relative tolerance
     ), f"Reaction forces incorrect. Expected: \n{expected_reactions}\nGot: \n{mesh.forces}"
-
-    mesh.compute_element_strain_stress()
-
-    # Print the results
-    print("element_strains", mesh.element_strains, sep="\n")
-    print("element_stresses", mesh.element_stresses, sep="\n")
-
-    mesh.compute_von_mises_stress()
-    print("von_mises_stress", mesh.von_mises_stress, sep="\n")
 
     # Visualize the truss using PyVista
 
@@ -342,16 +303,7 @@ def test_cantilever_beam():
 
     mesh.forces[n_elements, 1] = -force
 
-    mesh.assemble_global_tensors()
     mesh.solve()
-    mesh.compute_element_strain_stress()
-    mesh.compute_von_mises_stress()
-
-    print("displacement_vector", mesh.displacement_vector, sep="\n")
-    print("forces", mesh.forces, sep="\n")
-    print("element_strains", mesh.element_strains, sep="\n")
-    print("element_stresses", mesh.element_stresses, sep="\n")
-    print("von_mises_stress", mesh.von_mises_stress, sep="\n")
 
     plotter = pv.Plotter()
 
@@ -429,17 +381,12 @@ def test_single_hex8():
         ],
         constraints_vector=constraints,
     )
-    mesh.assemble_global_tensors()
 
     # Apply point load at Node 3
     mesh.forces[-1, 1] = force  # Load in the negative Y direction
 
     # Solve the system
     mesh.solve()
-    mesh.compute_element_strain_stress()
-    mesh.compute_von_mises_stress()
-    print("displacement_vector", mesh.displacement_vector, sep="\n")
-    print("forces", mesh.forces, sep="\n")
 
     plotter = pv.Plotter()
 
@@ -550,16 +497,11 @@ def test_cantilever_beam_hex8():
     # plotter.show_grid()
     # plotter.show()
 
-    # Assemble global stiffness matrix
-    mesh.assemble_global_tensors()
-
     # Apply point load at Node 3
     mesh.forces[-1, 1] = force  # Load in the negative Y direction
 
     # Solve the system
     mesh.solve()
-    print("displacement_vector", mesh.displacement_vector, sep="\n")
-    print("forces", mesh.forces, sep="\n")
 
     # # Assert the reaction forces are as expected at the fixed node
     # # Reaction forces should balance the applied load
@@ -574,15 +516,6 @@ def test_cantilever_beam_hex8():
     #     atol=1e-3,  # Absolute tolerance
     #     rtol=1e-4,  # Relative tolerance
     # ), f"Reaction forces incorrect. Expected: \n{expected_reactions}\nGot: \n{mesh.forces}"
-
-    # Compute element stresses and strains
-    mesh.compute_element_strain_stress()
-    mesh.compute_von_mises_stress()
-
-    # Print the results
-    print("element_strains", mesh.element_strains, sep="\n")
-    print("element_stresses", mesh.element_stresses, sep="\n")
-    print("von_mises_stress", mesh.von_mises_stress, sep="\n")
 
     plotter = pv.Plotter()
 
