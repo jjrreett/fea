@@ -110,18 +110,18 @@ def rod_tensors(nodes, E, A):
     Compute the stiffness matrix for a 2-node rod element.
 
     Parameters:
-    - nodes: npt.NDArray[np.float32] (2x6), nodal coordinates of the rod in the global frame.
+    - nodes: npt.NDArray[np.float32] (2x3), nodal coordinates of the rod in the global frame.
     - E: float, Young's modulus of the material.
     - A: float, cross-sectional area of the rod.
 
     Returns:
-    - Ke: npt.NDArray[np.float32] (12x12), the element stiffness matrix.
-    - Be: npt.NDArray[np.float32] (6x12), the strain-displacement matrix.
-    - CBe: npt.NDArray[np.float32] (6x12), the stress-displacement matrix.
+    - Ke: npt.NDArray[np.float32] (6x6), the element stiffness matrix.
+    - Be: npt.NDArray[np.float32] (6x6), the strain-displacement matrix.
+    - CBe: npt.NDArray[np.float32] (6x6), the stress-displacement matrix.
     """
 
-    # Extract only the translational coordinates (x, y, z)
-    node_coords = nodes[:, :3]
+    # Extract the translational coordinates
+    node_coords = nodes
 
     # Compute the length and direction of the rod
     vector = node_coords[1] - node_coords[0]
@@ -134,22 +134,22 @@ def rod_tensors(nodes, E, A):
     # Transform local stiffness matrix into global coordinates
     T = np.outer(direction, direction)  # 3x3 transformation matrix
 
-    # Expand to 12x12 global stiffness matrix, focusing only on translational DOFs
-    Ke = np.zeros((12, 12), dtype=np.float32)
+    # Expand to 6x6 global stiffness matrix
+    Ke = np.zeros((6, 6), dtype=np.float32)
     for i in range(2):  # Loop over nodes
         for j in range(2):  # Loop over nodes
-            Ke[i * 6 : i * 6 + 3, j * 6 : j * 6 + 3] = k_local[i, j] * T
+            Ke[i * 3 : i * 3 + 3, j * 3 : j * 3 + 3] = k_local[i, j] * T
 
-    # Strain-displacement matrix (6x12), focusing on full 3D stress/strain components
-    Be = np.zeros((6, 12), dtype=np.float32)
-    # Axial strain (εxx)
+    # Full 6x6 strain-displacement matrix (6 strain components × 6 DOFs)
+    Be = np.zeros((6, 6), dtype=np.float32)
+    # Axial strain (ε_xx)
     Be[0, :3] = -direction / length
-    Be[0, 6:9] = direction / length
-    # Other components are zero for a 1D rod
-    # εyy, εzz, γxy, γxz, γyz remain zero
+    Be[0, 3:] = direction / length
+    # Other strain components (ε_yy, ε_zz, γ_xy, γ_xz, γ_yz) remain zero
 
-    # Stress-displacement matrix (6x12), scaled by Young's modulus
-    CBe = E * Be
+    # Full 6x6 stress-displacement matrix
+    CBe = np.zeros((6, 6), dtype=np.float32)
+    CBe[0] = E * Be[0]  # Only the axial stress component is nonzero
 
     return Ke, Be, CBe
 
