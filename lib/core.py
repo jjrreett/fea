@@ -376,14 +376,14 @@ def hex8_tensors(nodes, E, nu):
     Compute the stiffness matrix for an 8-node hexahedral element.
 
     Parameters:
-    - nodes: npt.NDArray[np.float32] (8x6), nodal coordinates of the hexahedron in the global frame.
+    - nodes: npt.NDArray[np.float32] (8x3), nodal coordinates of the hexahedron in the global frame.
     - E: float, Young's modulus of the material.
     - nu: float, Poisson's ratio of the material.
 
     Returns:
-    - Ke: npt.NDArray[np.float32] (48x48), the element stiffness matrix.
-    - Be: npt.NDArray[np.float32] (6x48), the strain-displacement matrix.
-    - CBe: npt.NDArray[np.float32] (6x48), the stress-displacement matrix.
+    - Ke: npt.NDArray[np.float32] (24x24), the element stiffness matrix.
+    - Be: npt.NDArray[np.float32] (6x24), the strain-displacement matrix.
+    - CBe: npt.NDArray[np.float32] (6x24), the stress-displacement matrix.
     """
 
     # Gauss quadrature points and weights (2-point rule)
@@ -399,12 +399,13 @@ def hex8_tensors(nodes, E, nu):
             [0, 0, 0, (1 - 2 * nu) / 2, 0, 0],
             [0, 0, 0, 0, (1 - 2 * nu) / 2, 0],
             [0, 0, 0, 0, 0, (1 - 2 * nu) / 2],
-        ]
+        ],
+        dtype=np.float32,
     )
 
-    # Initialize stiffness matrix
-    Ke = np.zeros((48, 48))
-    Be = np.zeros((6, 48))  # strain displacement matrix
+    # Initialize stiffness matrix and strain-displacement matrix
+    Ke = np.zeros((24, 24), dtype=np.float32)
+    Be = np.zeros((6, 24), dtype=np.float32)
 
     # Shape function derivatives in natural coordinates
     def shape_function_derivatives(xi, eta, zeta):
@@ -441,7 +442,8 @@ def hex8_tensors(nodes, E, nu):
                         (1 + xi) * (1 + eta),
                         (1 - xi) * (1 + eta),
                     ],
-                ]
+                ],
+                dtype=np.float32,
             )
             / 8.0
         )
@@ -458,9 +460,7 @@ def hex8_tensors(nodes, E, nu):
                 dN_dxi = shape_function_derivatives(xi_pt, eta_pt, zeta_pt)
 
                 # Jacobian matrix
-                J = (
-                    dN_dxi @ nodes[:, :3]
-                )  # Only use the first 3 columns for positional coordinates
+                J = dN_dxi @ nodes
                 detJ = np.linalg.det(J)
 
                 if detJ <= 0:
@@ -475,46 +475,27 @@ def hex8_tensors(nodes, E, nu):
                 dN_dx = J_inv @ dN_dxi
 
                 # Strain-displacement matrix B
-                B = np.zeros((6, 24))
+                B = np.zeros((6, 24), dtype=np.float32)
                 for n in range(8):  # Loop over nodes
-                    B[0, n * 3] = dN_dx[0, n]
-                    B[1, n * 3 + 1] = dN_dx[1, n]
-                    B[2, n * 3 + 2] = dN_dx[2, n]
-                    B[3, n * 3] = dN_dx[1, n]
+                    B[0, n * 3] = dN_dx[0, n]  # ε_xx
+                    B[1, n * 3 + 1] = dN_dx[1, n]  # ε_yy
+                    B[2, n * 3 + 2] = dN_dx[2, n]  # ε_zz
+                    B[3, n * 3] = dN_dx[1, n]  # γ_xy
                     B[3, n * 3 + 1] = dN_dx[0, n]
-                    B[4, n * 3 + 1] = dN_dx[2, n]
+                    B[4, n * 3 + 1] = dN_dx[2, n]  # γ_yz
                     B[4, n * 3 + 2] = dN_dx[1, n]
-                    B[5, n * 3] = dN_dx[2, n]
+                    B[5, n * 3] = dN_dx[2, n]  # γ_zx
                     B[5, n * 3 + 2] = dN_dx[0, n]
 
-                # Correctly assemble stiffness and strain-displacement matrices
-                for n1 in range(8):  # Loop over each node
-                    for n2 in range(8):  # Loop over coupling nodes
-                        # Indices for global stiffness matrix (translational DOFs only)
-                        idx1 = slice(
-                            n1 * 6, n1 * 6 + 3
-                        )  # Translational DOFs for node n1
-                        idx2 = slice(
-                            n2 * 6, n2 * 6 + 3
-                        )  # Translational DOFs for node n2
+                # Stiffness matrix contribution
+                Ke += weight * B.T @ C @ B * detJ
 
-                        # Use np.ix_ to map local stiffness contributions
-                        Ke[
-                            np.ix_(
-                                range(idx1.start, idx1.stop),
-                                range(idx2.start, idx2.stop),
-                            )
-                        ] += (
-                            weight
-                            * (B.T @ C @ B)[
-                                n1 * 3 : (n1 + 1) * 3, n2 * 3 : (n2 + 1) * 3
-                            ]
-                        )
+                # Strain-displacement matrix contribution
+                Be += weight * B * detJ
 
-                        # Strain-displacement matrix
-                        Be[:, idx1] += weight * B[:, n1 * 3 : (n1 + 1) * 3] * detJ
+    # Compute stress-displacement matrix
+    CBe = C @ Be
 
-    CBe = C @ Be  # stress displacement matrix
     return Ke, Be, CBe
 
 

@@ -393,6 +393,84 @@ def test_cantilever_beam():
 from math import ceil
 
 
+def test_single_hex8():
+    E = 10_000_000  # Young's modulus in psi
+    nu = 0
+    force = 500  # Applied force in lbf
+
+    nodes = np.array(
+        [
+            [0, 0, 0],  # Node 1
+            [1, 0, 0],  # Node 4
+            [1, 1, 0],  # Node 3
+            [0, 1, 0],  # Node 2
+            [0, 0, 1],  # Node 5
+            [1, 0, 1],  # Node 8
+            [1, 1, 1],  # Node 7
+            [0, 1, 1],  # Node 6
+        ]
+    )
+
+    elements = np.array([[0, 1, 2, 3, 4, 5, 6, 7]])
+    constraints = np.zeros(nodes.shape, dtype=np.int8)
+    # Fix all translational DOFs at the bottom face
+    constraints[:4, :] = 1
+
+    print("nodes", nodes.shape, nodes, sep="\n")
+    print("elements", elements.shape, elements, sep="\n")
+    print("constraints", constraints.shape, constraints, sep="\n")
+
+    mesh = core.Mesh(
+        nodes=nodes,
+        elements=elements,
+        element_type=[core.ElementType.HEX8],
+        element_properties=[
+            [E, nu],  # All elements share the same properties
+        ],
+        constraints_vector=constraints,
+    )
+    mesh.assemble_global_tensors()
+
+    # Apply point load at Node 3
+    mesh.forces[-1, 1] = force  # Load in the negative Y direction
+
+    # Solve the system
+    mesh.solve()
+    mesh.compute_element_strain_stress()
+    mesh.compute_von_mises_stress()
+    print("displacement_vector", mesh.displacement_vector, sep="\n")
+    print("forces", mesh.forces, sep="\n")
+
+    plotter = pv.Plotter()
+
+    pvmesh = mesh.generate_pv_unstructured_mesh()
+
+    pvmesh.point_data["displacement"] = np.linalg.norm(mesh.displacement_vector, axis=1)
+
+    pvmesh.cell_data["von_mises_stress"] = mesh.von_mises_stress
+
+    plotter.add_mesh(
+        pvmesh,
+        scalars="displacement",
+        show_edges=True,
+        cmap="viridis",
+    )
+
+    # Calculate max arrow size as 10% of the grid size
+    max_force = np.max(np.linalg.norm(mesh.forces, axis=1))
+
+    # Add forces as arrows
+    plotter.add_arrows(
+        mesh.nodes,
+        mesh.forces,
+        color="red",
+        mag=0.1 * pvmesh.length / max_force,
+    )
+
+    plotter.show_grid()
+    plotter.show()
+
+
 def test_cantilever_beam_hex8():
     # Material and geometric properties
     E = 10_000_000  # Young's modulus in psi
@@ -423,7 +501,6 @@ def test_cantilever_beam_hex8():
     y = np.linspace(0, y_size, n_nodes_y)
     z = np.linspace(0, z_size, n_nodes_z)
     nodes = np.array(np.meshgrid(x, y, z)).T.reshape(-1, 3)
-    nodes = np.hstack((nodes, np.zeros((nodes.shape[0], 3))))
 
     elements = np.array(
         [
@@ -443,11 +520,9 @@ def test_cantilever_beam_hex8():
         ]
     )
 
-    constraints = np.zeros((nodes.shape[0], 6), dtype=np.int8)
+    constraints = np.zeros(nodes.shape, dtype=np.int8)
     # Fix all translational DOFs at the bottom face
-    constraints[: n_nodes_x * n_nodes_y, :3] = 1
-    # Fix all rotational DOFs
-    constraints[:, 3:] = 1
+    constraints[: n_nodes_x * n_nodes_y, :] = 1
 
     print("nodes", nodes.shape, nodes, sep="\n")
     print("elements", elements.shape, elements, sep="\n")
@@ -513,9 +588,7 @@ def test_cantilever_beam_hex8():
 
     pvmesh = mesh.generate_pv_unstructured_mesh()
 
-    pvmesh.point_data["displacement"] = np.linalg.norm(
-        mesh.displacement_vector[:, :3], axis=1
-    )
+    pvmesh.point_data["displacement"] = np.linalg.norm(mesh.displacement_vector, axis=1)
 
     pvmesh.cell_data["von_mises_stress"] = mesh.von_mises_stress
 
@@ -527,12 +600,12 @@ def test_cantilever_beam_hex8():
     )
 
     # Calculate max arrow size as 10% of the grid size
-    max_force = np.max(np.linalg.norm(mesh.forces[:, :3], axis=1))
+    max_force = np.max(np.linalg.norm(mesh.forces, axis=1))
 
     # Add forces as arrows
     plotter.add_arrows(
-        mesh.nodes[:, :3],
-        mesh.forces[:, :3],
+        mesh.nodes,
+        mesh.forces,
         color="red",
         mag=0.1 * pvmesh.length / max_force,
     )
@@ -661,56 +734,6 @@ def test_prism6():
     print("Prism6 mesh test passed successfully!")
 
 
-# def test_single_hex8():
-#     E = 10_000_000  # Young's modulus in psi
-#     nu = 0
-#     force = 500  # Applied force in lbf
-
-#     nodes = np.array(
-#         [
-#             [0, 0, 0],  # Node 1
-#             [1, 0, 0],  # Node 4
-#             [1, 1, 0],  # Node 3
-#             [0, 1, 0],  # Node 2
-#             [0, 0, 1],  # Node 5
-#             [1, 0, 1],  # Node 8
-#             [1, 1, 1],  # Node 7
-#             [0, 1, 1],  # Node 6
-#         ]
-#     )
-#     nodes = np.hstack((nodes, np.zeros((nodes.shape[0], 3))))
-
-#     elements = np.array([[0, 1, 2, 3, 4, 5, 6, 7]])
-#     constraints = np.zeros((nodes.shape[0], 6), dtype=np.int8)
-#     # Fix all translational DOFs at the bottom face
-#     constraints[:4, :3] = 1
-#     # Fix all rotational DOFs
-#     constraints[:, 3:] = 1
-
-#     print("nodes", nodes.shape, nodes, sep="\n")
-#     print("elements", elements.shape, elements, sep="\n")
-#     print("constraints", constraints.shape, constraints, sep="\n")
-
-#     mesh = core.Mesh(
-#         nodes=nodes,
-#         elements=elements,
-#         element_type=[core.ElementType.HEX8],
-#         element_properties=[
-#             [E, nu],  # All elements share the same properties
-#         ],
-#         constraints_vector=constraints,
-#     )
-#     mesh.assemble_global_tensors()
-
-#     # Apply point load at Node 3
-#     mesh.forces[-1, 1] = force  # Load in the negative Y direction
-
-#     # Solve the system
-#     mesh.solve()
-#     print("displacement_vector", mesh.displacement_vector, sep="\n")
-#     print("forces", mesh.forces, sep="\n")
-
-
-# test_cantilever_beam_hex8()
-test_prism6()
-# test_single_hex8()
+test_single_hex8()
+test_cantilever_beam_hex8()
+# test_prism6()
