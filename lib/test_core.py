@@ -59,14 +59,20 @@ def test_truss1():
 
     pv.set_plot_theme("dark")
 
-    # plotter = pv.Plotter()
-    # grid = mesh.generate_pv_unstructured_mesh()
-    # plotter.add_mesh(
-    #     grid,
-    #     show_edges=True,
-    #     line_width=10,
-    #     show_vertices=True,
-    # )
+    plotter = pv.Plotter()
+    grid = mesh.generate_pv_unstructured_mesh()
+    plotter.add_mesh(
+        grid,
+        show_edges=True,
+        line_width=10,
+        show_vertices=True,
+    )
+
+    arrows = mesh.generate_pv_force_arrows()
+    plotter.add_mesh(
+        arrows,
+        color="red",
+    )
 
     # # Calculate max arrow size as 10% of the grid size (grid length is the diagonal of the grid)
     # max_force = np.max(np.linalg.norm(mesh.forces, axis=1))
@@ -79,8 +85,8 @@ def test_truss1():
     #     mag=0.1 * grid.length / max_force,
     # )
 
-    # plotter.show_grid()
-    # plotter.show()
+    plotter.show_grid()
+    plotter.show()
 
 
 def test_truss():
@@ -144,28 +150,22 @@ def test_truss():
 
     pv.set_plot_theme("dark")
 
-    # plotter = pv.Plotter()
-    # grid = mesh.generate_pv_unstructured_mesh()
-    # plotter.add_mesh(
-    #     grid,
-    #     show_edges=True,
-    #     line_width=10,
-    #     show_vertices=True,
-    # )
+    plotter = pv.Plotter()
+    grid = mesh.generate_pv_unstructured_mesh()
+    plotter.add_mesh(
+        grid,
+        show_edges=True,
+        line_width=10,
+        show_vertices=True,
+    )
+    arrows = mesh.generate_pv_force_arrows()
+    plotter.add_mesh(
+        arrows,
+        color="red",
+    )
 
-    # # Calculate max arrow size as 10% of the grid size (grid length is the diagonal of the grid)
-    # max_force = np.max(np.linalg.norm(mesh.forces, axis=1))
-
-    # # Add forces as arrows
-    # plotter.add_arrows(
-    #     mesh.nodes,
-    #     mesh.forces,
-    #     color="red",
-    #     mag=0.1 * grid.length / max_force,
-    # )
-
-    # plotter.show_grid()
-    # plotter.show()
+    plotter.show_grid()
+    plotter.show()
 
 
 def test_cantilever_truss():
@@ -235,11 +235,6 @@ def test_cantilever_truss():
     plotter = pv.Plotter()
 
     pvmesh = mesh.generate_pv_unstructured_mesh()
-
-    pvmesh.point_data["displacement"] = np.linalg.norm(mesh.displacement_vector, axis=1)
-
-    pvmesh.cell_data["von_mises_stress"] = mesh.von_mises_stress
-
     plotter.add_mesh(
         pvmesh,
         scalars="displacement",
@@ -249,15 +244,10 @@ def test_cantilever_truss():
         show_vertices=True,
     )
 
-    # Calculate max arrow size as 10% of the grid size
-    max_force = np.max(np.linalg.norm(mesh.forces, axis=1))
-
-    # Add forces as arrows
-    plotter.add_arrows(
-        mesh.nodes,
-        mesh.forces,
+    arrows = mesh.generate_pv_force_arrows()
+    plotter.add_mesh(
+        arrows,
         color="red",
-        mag=0.1 * pvmesh.length / max_force,
     )
 
     plotter.show_grid()
@@ -308,13 +298,6 @@ def test_cantilever_beam():
     plotter = pv.Plotter()
 
     pvmesh = mesh.generate_pv_unstructured_mesh()
-
-    pvmesh.point_data["displacement"] = np.linalg.norm(
-        mesh.displacement_vector[:, :3], axis=1
-    )
-
-    pvmesh.cell_data["von_mises_stress"] = mesh.von_mises_stress
-
     plotter.add_mesh(
         pvmesh,
         scalars="von_mises_stress",
@@ -323,16 +306,10 @@ def test_cantilever_beam():
         line_width=10,
         show_vertices=True,
     )
-
-    # Calculate max arrow size as 10% of the grid size
-    max_force = np.max(np.linalg.norm(mesh.forces[:, :3], axis=1))
-
-    # Add forces as arrows
-    plotter.add_arrows(
-        mesh.nodes[:, :3],
-        mesh.forces[:, :3],
+    arrows = mesh.generate_pv_force_arrows()
+    plotter.add_mesh(
+        arrows,
         color="red",
-        mag=0.1 * pvmesh.length / max_force,
     )
 
     plotter.show_grid()
@@ -392,26 +369,16 @@ def test_single_hex8():
 
     pvmesh = mesh.generate_pv_unstructured_mesh()
 
-    pvmesh.point_data["displacement"] = np.linalg.norm(mesh.displacement_vector, axis=1)
-
-    pvmesh.cell_data["von_mises_stress"] = mesh.von_mises_stress
-
     plotter.add_mesh(
         pvmesh,
         scalars="displacement",
         show_edges=True,
         cmap="viridis",
     )
-
-    # Calculate max arrow size as 10% of the grid size
-    max_force = np.max(np.linalg.norm(mesh.forces, axis=1))
-
-    # Add forces as arrows
-    plotter.add_arrows(
-        mesh.nodes,
-        mesh.forces,
+    arrows = mesh.generate_pv_force_arrows()
+    plotter.add_mesh(
+        arrows,
         color="red",
-        mag=0.1 * pvmesh.length / max_force,
     )
 
     plotter.show_grid()
@@ -521,26 +488,16 @@ def test_cantilever_beam_hex8():
 
     pvmesh = mesh.generate_pv_unstructured_mesh()
 
-    pvmesh.point_data["displacement"] = np.linalg.norm(mesh.displacement_vector, axis=1)
-
-    pvmesh.cell_data["von_mises_stress"] = mesh.von_mises_stress
-
     plotter.add_mesh(
         pvmesh,
         scalars="von_mises_stress",
         show_edges=True,
         cmap="viridis",
     )
-
-    # Calculate max arrow size as 10% of the grid size
-    max_force = np.max(np.linalg.norm(mesh.forces, axis=1))
-
-    # Add forces as arrows
-    plotter.add_arrows(
-        mesh.nodes,
-        mesh.forces,
+    arrows = mesh.generate_pv_force_arrows()
+    plotter.add_mesh(
+        arrows,
         color="red",
-        mag=0.1 * pvmesh.length / max_force,
     )
 
     plotter.show_grid()
@@ -580,7 +537,6 @@ def test_prism6():
     y = np.linspace(0, y_size, n_nodes_y)
     z = np.linspace(0, z_size, n_nodes_z)
     nodes = np.array(np.meshgrid(x, y, z)).T.reshape(-1, 3)
-    nodes = np.hstack((nodes, np.zeros((nodes.shape[0], 3))))  # Add rotational DOFs
 
     print("nodes", nodes.shape, nodes, sep="\n")
 
@@ -607,11 +563,9 @@ def test_prism6():
     elements = np.array(elements)
     print("elements", elements.shape, elements, sep="\n")
 
-    constraints = np.zeros((nodes.shape[0], 6), dtype=np.int8)
+    constraints = np.zeros(nodes.shape, dtype=np.int8)
     # Fix all translational DOFs at the bottom face
-    constraints[: n_nodes_x * n_nodes_y, :3] = 1
-    # Fix all rotational DOFs
-    constraints[:, 3:] = 1
+    constraints[: n_nodes_x * n_nodes_y, :] = 1
 
     print("constraints", constraints.shape, constraints, sep="\n")
     # Initialize the mesh
@@ -623,9 +577,6 @@ def test_prism6():
         constraints_vector=constraints,
     )
 
-    # Assemble global stiffness matrix
-    mesh.assemble_global_tensors()
-
     # Apply point load at the top center node
     top_center_node = -1  # Assuming the last node is at the top center
     mesh.forces[top_center_node, 1] = -force  # Apply force in the -Y direction
@@ -633,18 +584,9 @@ def test_prism6():
     # Solve the system
     mesh.solve()
 
-    # Compute element stresses and strains
-    mesh.compute_element_strain_stress()
-    mesh.compute_von_mises_stress()
-
     # Visualization (optional)
     plotter = pv.Plotter()
-
     pvmesh = mesh.generate_pv_unstructured_mesh()
-    pvmesh.point_data["displacement"] = np.linalg.norm(
-        mesh.displacement_vector[:, :3], axis=1
-    )
-    pvmesh.cell_data["von_mises_stress"] = mesh.von_mises_stress
 
     plotter.add_mesh(
         pvmesh,
@@ -652,13 +594,10 @@ def test_prism6():
         show_edges=True,
         cmap="viridis",
     )
-
-    max_force = np.max(np.linalg.norm(mesh.forces[:, :3], axis=1))
-    plotter.add_arrows(
-        mesh.nodes[:, :3],
-        mesh.forces[:, :3],
+    arrows = mesh.generate_pv_force_arrows()
+    plotter.add_mesh(
+        arrows,
         color="red",
-        mag=0.1 * pvmesh.length / max_force,
     )
 
     plotter.show_grid()

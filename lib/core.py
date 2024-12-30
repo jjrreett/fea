@@ -6,6 +6,7 @@ import numpy as np
 
 from collections.abc import Sequence
 import numpy.typing as npt
+import pyvista as pv
 
 
 element_tensor_functions = {}
@@ -872,8 +873,6 @@ class Mesh:
         debug_np_print("Mesh.von_mises_stress", self.von_mises_stress)
 
     def generate_pv_unstructured_mesh(self):
-        import pyvista as pv
-
         """
         cells : sequence[int]
             Array of cells.  Each cell contains the number of points in the
@@ -932,4 +931,105 @@ class Mesh:
         # Create the spatial reference
         grid = pv.UnstructuredGrid(cells, cell_type, points)
 
+        if self.displacement_vector is not None:
+            grid.point_data["displacement"] = np.linalg.norm(
+                self.displacement_vector, axis=1
+            )
+
+        if self.von_mises_stress is not None:
+            grid.cell_data["von_mises_stress"] = self.von_mises_stress
+
         return grid
+
+    def _gen_pv_arrows(self, cent, direction, mag=1, **kwargs):
+        import pyvista
+        from pyvista import _vtk
+        from pyvista.core.utilities.helpers import wrap
+
+        """Generate arrows for the plotter.
+
+        Parameters
+        ----------
+        cent : np.ndarray
+            Array of centers.
+
+        direction : np.ndarray
+            Array of direction vectors.
+
+        mag : float, optional
+            Amount to scale the direction vectors.
+
+        **kwargs : dict, optional
+            See :func:`pyvista.Plotter.add_mesh` for optional
+            keyword arguments.
+
+        Returns
+        -------
+        pyvista.Actor
+            Actor of the arrows.
+
+        Examples
+        --------
+        Plot a random field of vectors and save a screenshot of it.
+
+        >>> import numpy as np
+        >>> import pyvista as pv
+        >>> rng = np.random.default_rng(seed=0)
+        >>> cent = rng.random((10, 3))
+        >>> direction = rng.random((10, 3))
+        >>> arrows = pv.core.Mesh()._gen_pv_arrows(cent, direction, mag=2)
+        >>> plotter = pv.Plotter()
+        >>> _ = plotter.add_mesh(arrows)
+        >>> plotter.show()
+
+        """
+        if cent.shape != direction.shape:  # pragma: no cover
+            raise ValueError("center and direction arrays must have the same shape")
+
+        direction = direction.copy()
+        if cent.ndim != 2:
+            cent = cent.reshape((-1, 3))
+
+        if direction.ndim != 2:
+            direction = direction.reshape((-1, 3))
+
+        if mag != 1:
+            direction = direction * mag
+
+        pdata = pyvista.vector_poly_data(cent, direction)
+        # Create arrow object
+        arrow = _vtk.vtkArrowSource()
+        arrow.Update()
+        glyph3D = _vtk.vtkGlyph3D()
+        glyph3D.SetSourceData(arrow.GetOutput())
+        glyph3D.SetInputData(pdata)
+        glyph3D.SetVectorModeToUseVector()
+        glyph3D.Update()
+
+        arrows = wrap(glyph3D.GetOutput())
+        return arrows
+
+    def generate_pv_force_arrows(self, max_size=0.1):
+        """
+        Generate force arrows for visualization.
+
+        Parameters:
+        - max_size: float, maximum size of the largest arrow in the grid dimensions.
+
+        Returns:
+        - arrows: pyvista.PolyData, arrows representing the forces.
+        """
+        # Calculate the bounding box dimensions
+        min_coords = np.min(self.nodes, axis=0)
+        max_coords = np.max(self.nodes, axis=0)
+        bounding_box_dims = max_coords - min_coords
+        max_dim = np.max(bounding_box_dims)
+
+        # Calculate the scaling factor based on the maximum force and max_size
+        max_force = np.max(np.linalg.norm(self.forces, axis=1))
+        scale_factor = max_size * max_dim / max_force
+
+        # Create arrows
+        arrows = self._gen_pv_arrows(self.nodes, self.forces, mag=scale_factor)
+
+        return arrows
