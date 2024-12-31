@@ -639,11 +639,11 @@ def tube_prism6():
     force = 100  # Applied force in lbf
 
     outer_radius = 4.0
-    thickness = 0.2
+    thickness = 0.05
     inner_radius = outer_radius - thickness
     height = 5.0
 
-    elm_size = 0.2
+    elm_size = 0.05
 
     n_points = int(ceil(2 * np.pi * outer_radius / elm_size))
     n_layers = int(ceil(height / elm_size))
@@ -731,7 +731,7 @@ def tube_prism6():
 
     plotter = pv.Plotter()
     m = mesh.generate_pv_unstructured_mesh()
-    plotter.add_mesh(m, show_edges=True, scalars="von_mises_stress", cmap="viridis")
+    plotter.add_mesh(m, scalars="von_mises_stress", cmap="viridis")
     m = mesh.generate_pv_force_arrows()
     plotter.add_mesh(m, color="red")
 

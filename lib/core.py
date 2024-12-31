@@ -2,10 +2,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, Tuple
+import time
 
 import numpy as np
 import numpy.typing as npt
 import pyvista as pv
+from scipy.sparse import lil_matrix, csr_matrix
+from scipy.sparse.linalg import spsolve
+from tqdm import tqdm
 
 element_tensor_functions = {}
 NODES_WIDTH = 3
@@ -1028,17 +1032,21 @@ class Mesh:
         return np.repeat(x, self.num_elements // x.size)
 
     def assemble_global_tensors(self):
-        self.Kg = np.zeros((self.num_dofs, self.num_dofs), dtype=np.float32)
-
+        rows = []
+        cols = []
+        data = []
         self.element_tensors = []
 
-        for element, element_type, properties in zip(
-            self.elements, self.element_type, self.element_properties
+        for element, element_type, properties in tqdm(
+            zip(self.elements, self.element_type, self.element_properties),
+            total=self.num_elements,
+            desc="Assembling global tensors",
         ):
             element_tensor = ElementType.element_tensors(
                 element_type, self.nodes[element], *properties
             )
             self.element_tensors.append(element_tensor)
+
             Ke, _, _ = element_tensor
 
             dof_indices = np.array(
@@ -1048,8 +1056,18 @@ class Mesh:
                     for j in range(NODES_WIDTH)
                 ]
             )
-            idx = np.ix_(dof_indices, dof_indices)
-            self.Kg[idx] += Ke
+
+            for i, row_idx in enumerate(dof_indices):
+                for j, col_idx in enumerate(dof_indices):
+                    rows.append(row_idx)
+                    cols.append(col_idx)
+                    data.append(Ke[i, j])
+
+        # Create the CSR matrix directly
+        self.Kg = csr_matrix((data, (rows, cols)), shape=(self.num_dofs, self.num_dofs))
+        debug_print(
+            f"Memory usage of Kg as csr_matrix: {self.Kg.data.nbytes / 1024} kb"
+        )
 
     def compute_element_strain_stress(self):
         self.element_strains = np.zeros((self.num_elements, 6), dtype=np.float32)
@@ -1080,15 +1098,29 @@ class Mesh:
             self.von_mises_stress[i] = von_mises
 
     def solve(self):
+        start = time.time()
+        debug_print("Start of stiffness matrix assembly")
         self.assemble_global_tensors()
-        debug_np_print("Mesh.Kg", self.Kg)
+        # debug_np_print("Mesh.Kg", self.Kg)
+        debug_print(
+            f"End of stiffness matrix assembly, elapsed time: {time.time() - start}"
+        )
 
+        # Determine free degrees of freedom
         free_dofs = np.where(self.constraints_vector.flatten() == 0)[0]
 
-        K = self.Kg[np.ix_(free_dofs, free_dofs)]
+        # Extract reduced stiffness matrix and force vector
+        K = self.Kg[free_dofs, :][:, free_dofs]
         f = self.forces.flatten()[free_dofs]
 
-        u = np.linalg.solve(K, f)
+        # Debug sparse memory usage
+        debug_print(f"Memory usage of K reduced: {K.data.nbytes / 1024} kb")
+
+        # Solve the linear system using a sparse solver
+        start = time.time()
+        debug_print("Start of solve")
+        u = spsolve(K, f)  # Use sparse solver
+        debug_print(f"End of solve, elapsed time: {time.time() - start}")
 
         # Reconstruct full displacement vector
         displacements = np.zeros((self.num_dofs,), dtype=np.float32)
@@ -1096,14 +1128,17 @@ class Mesh:
         self.displacement_vector = displacements.reshape(self.nodes.shape)
         debug_np_print("Mesh.displacement_vector", self.displacement_vector)
 
+        # Compute forces (Kg is sparse, @ is efficient for sparse matrices)
         forces = (self.Kg @ displacements.flatten()).reshape(self.nodes.shape)
         self.forces = forces
         debug_np_print("Mesh.forces", self.forces)
 
+        # Compute strains and stresses
         self.compute_element_strain_stress()
         debug_np_print("Mesh.element_strains", self.element_strains)
         debug_np_print("Mesh.element_stresses", self.element_stresses)
 
+        # Compute von Mises stress
         self.compute_von_mises_stress()
         debug_np_print("Mesh.von_mises_stress", self.von_mises_stress)
 
