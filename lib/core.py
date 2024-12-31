@@ -8,7 +8,7 @@ import numpy as np
 import numpy.typing as npt
 import pyvista as pv
 from scipy.sparse import lil_matrix, csr_matrix
-from scipy.sparse.linalg import spsolve
+from scipy.sparse.linalg import spsolve, cg
 from tqdm import tqdm
 
 element_tensor_functions = {}
@@ -1097,11 +1097,10 @@ class Mesh:
             )
             self.von_mises_stress[i] = von_mises
 
-    def solve(self):
+    def solve(self, use_iterative_solver=False, **args):
         start = time.time()
         debug_print("Start of stiffness matrix assembly")
         self.assemble_global_tensors()
-        # debug_np_print("Mesh.Kg", self.Kg)
         debug_print(
             f"End of stiffness matrix assembly, elapsed time: {time.time() - start}"
         )
@@ -1116,10 +1115,21 @@ class Mesh:
         # Debug sparse memory usage
         debug_print(f"Memory usage of K reduced: {K.data.nbytes / 1024} kb")
 
-        # Solve the linear system using a sparse solver
+        # Solve the linear system
         start = time.time()
         debug_print("Start of solve")
-        u = spsolve(K, f)  # Use sparse solver
+
+        if use_iterative_solver:
+            # Iterative solver (Conjugate Gradient)
+            debug_print("Using iterative solver (Conjugate Gradient)")
+            u, info = cg(K, f, **args)
+            if info != 0:
+                raise ValueError(f"Conjugate Gradient did not converge, info: {info}")
+        else:
+            # Direct solver
+            debug_print("Using direct solver (spsolve)")
+            u = spsolve(K, f)
+
         debug_print(f"End of solve, elapsed time: {time.time() - start}")
 
         # Reconstruct full displacement vector

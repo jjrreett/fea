@@ -727,7 +727,7 @@ def tube_prism6():
 
     print(mesh.forces)
 
-    mesh.solve()
+    mesh.solve(use_iterative_solver=True)
 
     plotter = pv.Plotter()
     m = mesh.generate_pv_unstructured_mesh()
