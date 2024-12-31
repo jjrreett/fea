@@ -1,13 +1,11 @@
-from doctest import debug
-from enum import Enum
-from dataclasses import dataclass, field
-from typing import Optional, Tuple
-import numpy as np
-
 from collections.abc import Sequence
+from dataclasses import dataclass
+from enum import Enum
+from typing import Optional, Tuple
+
+import numpy as np
 import numpy.typing as npt
 import pyvista as pv
-
 
 element_tensor_functions = {}
 NODES_WIDTH = 3
@@ -26,6 +24,23 @@ def debug_np_print(name, ary):
 def debug_print(*args, **kwargs):
     if DEBUG:
         print(*args, **kwargs)
+
+
+def gauss_points_2d(order=2):
+    """Returns Gauss quadrature points and weights for a triangle."""
+    if order == 2:
+        points = [(1 / 6, 1 / 6), (2 / 3, 1 / 6), (1 / 6, 2 / 3)]
+        weights = [1 / 3, 1 / 3, 1 / 3]
+    # Add higher-order rules if needed
+    return points, weights
+
+
+def gauss_points_1d(order=2):
+    """Returns Gauss quadrature points and weights for 1D integration."""
+    if order == 2:
+        points = [-1 / np.sqrt(3), 1 / np.sqrt(3)]
+        weights = [1, 1]
+    return points, weights
 
 
 class ElementType(Enum):
@@ -403,9 +418,7 @@ def hex8_tensors(nodes, E, nu):
     - CBe: npt.NDArray[np.float32] (6x24), the stress-displacement matrix.
     """
 
-    # Gauss quadrature points and weights (2-point rule)
-    gauss_points = np.array([-1 / np.sqrt(3), 1 / np.sqrt(3)])
-    weights = np.array([1, 1])
+    gauss_points, weights = gauss_points_1d()
 
     # Material stiffness matrix (3D isotropic elasticity)
     C = (E / ((1 + nu) * (1 - 2 * nu))) * np.array(
@@ -516,25 +529,236 @@ def hex8_tensors(nodes, E, nu):
     return Ke, Be, CBe
 
 
+# @ElementType.register_tensor_functions
+# def prism6_tensors(nodes, E, nu):
+#     """
+#     Compute the stiffness matrix for a 6-node prismatic element.
+
+#     Parameters:
+#     - nodes: npt.NDArray[np.float32] (6x3), nodal coordinates of the prism in the global frame.
+#     - E: float, Young's modulus of the material.
+#     - nu: float, Poisson's ratio of the material.
+
+#     Returns:
+#     - Ke: npt.NDArray[np.float32] (18x18), the element stiffness matrix.
+#     - Be: npt.NDArray[np.float32] (6x18), the strain-displacement matrix.
+#     - CBe: npt.NDArray[np.float32] (6x18), the stress-displacement matrix.
+#     """
+
+#     # Gauss quadrature points and weights (2-point rule)
+#     gauss_points = np.array([-1 / np.sqrt(3), 1 / np.sqrt(3)])
+#     weights = np.array([1, 1])
+
+#     # Material stiffness matrix (3D isotropic elasticity)
+#     C = (E / ((1 + nu) * (1 - 2 * nu))) * np.array(
+#         [
+#             [1 - nu, nu, nu, 0, 0, 0],
+#             [nu, 1 - nu, nu, 0, 0, 0],
+#             [nu, nu, 1 - nu, 0, 0, 0],
+#             [0, 0, 0, (1 - 2 * nu) / 2, 0, 0],
+#             [0, 0, 0, 0, (1 - 2 * nu) / 2, 0],
+#             [0, 0, 0, 0, 0, (1 - 2 * nu) / 2],
+#         ],
+#         dtype=np.float32,
+#     )
+
+#     # Initialize stiffness matrix and strain-displacement matrix
+#     Ke = np.zeros((18, 18), dtype=np.float32)
+#     Be = np.zeros((6, 18), dtype=np.float32)
+
+#     # Shape function derivatives in natural coordinates
+#     def shape_function_derivatives(xi, eta, zeta):
+#         """
+#         Computes the derivatives of the shape functions for a prism6 element
+#         with respect to the natural coordinates (xi, eta, zeta).
+#         """
+#         return np.array(
+#             [
+#                 [
+#                     -1 * (1 - eta) * (1 - zeta),
+#                     -1 * (1 - xi) * (1 - zeta),
+#                     -1 * (1 - xi) * (1 - eta),
+#                 ],
+#                 [(1 - eta) * (1 - zeta), -xi * (1 - zeta), -xi * (1 - eta)],
+#                 [eta * (1 - zeta), xi * (1 - zeta), -xi * eta],
+#                 [-eta * (1 - zeta), (1 - xi) * (1 - zeta), -(1 - xi) * eta],
+#                 [-(1 - eta) * zeta, -(1 - xi) * zeta, (1 - xi) * (1 - eta)],
+#                 [(1 - eta) * zeta, -xi * zeta, xi * (1 - eta)],
+#             ]
+#         ).T
+
+#     # Loop over Gauss points
+#     for i, xi_pt in enumerate(gauss_points):
+#         for j, eta_pt in enumerate(gauss_points):
+#             for k, zeta_pt in enumerate(gauss_points):
+#                 # Gauss point weight
+#                 weight = weights[i] * weights[j] * weights[k]
+
+#                 # Shape function derivatives in natural coordinates
+#                 dN_dxi = shape_function_derivatives(xi_pt, eta_pt, zeta_pt)
+#                 np_print("dN_dxi", dN_dxi)
+#                 np_print("nodes", nodes)
+
+#                 # Jacobian matrix
+#                 J = dN_dxi @ nodes
+#                 detJ = np.linalg.det(J)
+
+#                 if detJ <= 0:
+#                     np_print("dN_dxi", dN_dxi)
+#                     np_print("J", J)
+#                     np_print("detJ", detJ)
+#                     raise ValueError(
+#                         "Jacobian determinant is non-positive. Check the element shape."
+#                     )
+
+#                 # Inverse Jacobian
+#                 J_inv = np.linalg.inv(J)
+
+#                 # Shape function derivatives in global coordinates
+#                 dN_dx = J_inv @ dN_dxi
+
+#                 # Strain-displacement matrix B
+#                 B = np.zeros((6, 18), dtype=np.float32)
+#                 for n in range(6):  # Loop over nodes
+#                     B[0, n * 3] = dN_dx[0, n]  # ε_xx
+#                     B[1, n * 3 + 1] = dN_dx[1, n]  # ε_yy
+#                     B[2, n * 3 + 2] = dN_dx[2, n]  # ε_zz
+#                     B[3, n * 3] = dN_dx[1, n]  # γ_xy
+#                     B[3, n * 3 + 1] = dN_dx[0, n]
+#                     B[4, n * 3 + 1] = dN_dx[2, n]  # γ_yz
+#                     B[4, n * 3 + 2] = dN_dx[1, n]
+#                     B[5, n * 3] = dN_dx[2, n]  # γ_zx
+#                     B[5, n * 3 + 2] = dN_dx[0, n]
+
+#                 # Stiffness matrix contribution
+#                 Ke += weight * B.T @ C @ B * detJ
+
+#                 # Strain-displacement matrix contribution
+#                 Be += weight * B * detJ
+
+#     # Compute stress-displacement matrix
+#     CBe = C @ Be
+
+#     return Ke, Be, CBe
+
+#     def shape_function_derivatives(xi, eta, zeta):
+#         """
+#         Compute the derivatives of the shape functions for a 6-node prism element
+#         in the natural coordinate system (ξ, η, ζ).
+
+#         Parameters:
+#         - xi: float, natural coordinate along the triangular base.
+#         - eta: float, natural coordinate along the triangular base.
+#         - zeta: float, natural coordinate along the height (0 to 1).
+
+#         Returns:
+#         - dN_dxi: npt.NDArray[np.float32], derivatives of shape functions with respect to ξ, η, ζ.
+#         """
+#         # Derivatives with respect to xi, eta, and zeta
+#         dN_dxi = np.array(
+#             [
+#                 # dN/dξ (xi direction)
+#                 [
+#                     -(1 - eta) * (1 - zeta),
+#                     (1 - eta) * (1 - zeta),
+#                     eta * (1 - zeta),
+#                     -(1 - eta) * zeta,
+#                     (1 - eta) * zeta,
+#                     eta * zeta,
+#                 ],
+#                 # dN/dη (eta direction)
+#                 [
+#                     -(1 - xi) * (1 - zeta),
+#                     -xi * (1 - zeta),
+#                     xi * (1 - zeta),
+#                     -(1 - xi) * zeta,
+#                     -xi * zeta,
+#                     xi * zeta,
+#                 ],
+#                 # dN/dζ (zeta direction, height direction)
+#                 [
+#                     -(1 - xi) * (1 - eta),
+#                     -(1 - xi) * eta,
+#                     xi * eta,
+#                     (1 - xi) * (1 - eta),
+#                     (1 - xi) * eta,
+#                     xi * eta,
+#                 ],
+#             ],
+#             dtype=np.float32,
+#         )
+
+#         # Scale the derivatives for the natural coordinates
+#         dN_dxi /= 8.0
+#         return dN_dxi
+
+#     # Loop over Gauss points
+#     for i, xi_pt in enumerate(gauss_points):
+#         for j, eta_pt in enumerate(gauss_points):
+#             for k, zeta_pt in enumerate(gauss_points):
+#                 # Gauss point weight
+#                 weight = weights[i] * weights[j] * weights[k]
+
+#                 # Shape function derivatives in natural coordinates
+#                 dN_dxi = shape_function_derivatives(xi_pt, eta_pt, zeta_pt)
+
+#                 # Jacobian matrix
+#                 J = dN_dxi @ nodes
+#                 detJ = np.linalg.det(J)
+#                 if detJ <= 0:
+#                     raise ValueError(
+#                         "Jacobian determinant is non-positive. Check the element shape."
+#                     )
+
+#                 # Inverse Jacobian
+#                 J_inv = np.linalg.inv(J)
+
+#                 # Shape function derivatives in global coordinates
+#                 dN_dx = J_inv @ dN_dxi
+
+#                 # Strain-displacement matrix
+#                 B = np.zeros((6, 18), dtype=np.float32)
+#                 for n in range(6):  # Loop over nodes
+#                     B[0, n * 3] = dN_dx[0, n]  # ε_xx
+#                     B[1, n * 3 + 1] = dN_dx[1, n]  # ε_yy
+#                     B[2, n * 3 + 2] = dN_dx[2, n]  # ε_zz
+#                     B[3, n * 3] = dN_dx[1, n]  # γ_xy
+#                     B[3, n * 3 + 1] = dN_dx[0, n]
+#                     B[4, n * 3 + 1] = dN_dx[2, n]  # γ_yz
+#                     B[4, n * 3 + 2] = dN_dx[1, n]
+#                     B[5, n * 3] = dN_dx[2, n]  # γ_xz
+#                     B[5, n * 3 + 2] = dN_dx[0, n]
+
+#                 # Correctly assemble stiffness and strain-displacement matrices
+#                 Ke += weight * B.T @ C @ B * detJ
+#                 Be += weight * B * detJ
+
+#     # Stress-displacement matrix
+#     CBe = C @ Be
+
+#     return Ke, Be, CBe
+
+
 @ElementType.register_tensor_functions
-def prism6_tensors(nodes, E, nu):
+def prism6_tensors(
+    nodes: np.ndarray, E: float, nu: float
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Compute the stiffness matrix for a 6-node prism element.
+    Compute the stiffness matrix for a 6-node element.
 
     Parameters:
-    - nodes: npt.NDArray[np.float32] (6x6), nodal coordinates of the prism in the global frame.
+    - nodes: npt.NDArray[np.float32] (6x3), nodal coordinates of the solid in the global frame.
     - E: float, Young's modulus of the material.
     - nu: float, Poisson's ratio of the material.
 
     Returns:
     - Ke: npt.NDArray[np.float32] (18x18), the element stiffness matrix.
+    - Be: npt.NDArray[np.float32] (6x18), the strain-displacement matrix.
+    - CBe: npt.NDArray[np.float32] (6x18), the stress-displacement matrix.
     """
+    # Number of nodes and degrees of freedom per node
 
-    # Gauss quadrature points and weights (2-point rule for triangular prism)
-    gauss_points = np.array([-1 / np.sqrt(3), 1 / np.sqrt(3)])
-    weights = np.array([1, 1])
-
-    # Material stiffness matrix (3D isotropic elasticity)
+    # Material property matrix (C)
     C = (E / ((1 + nu) * (1 - 2 * nu))) * np.array(
         [
             [1 - nu, nu, nu, 0, 0, 0],
@@ -546,95 +770,106 @@ def prism6_tensors(nodes, E, nu):
         ]
     )
 
-    # Initialize stiffness matrix
-    Ke = np.zeros((18, 18))
-    Be = np.zeros((6, 18))  # Strain-displacement matrix
-
-    # Shape function derivatives in natural coordinates
     def shape_function_derivatives(xi, eta, zeta):
-        dN_dxi = (
-            np.array(
-                [
-                    [-(1 - eta), (1 - eta), eta, -eta, 0, 0],
-                    [-(1 - xi), -xi, xi, (1 - xi), 0, 0],
-                    [
-                        -(1 - xi) * (1 - eta),
-                        -(1 - xi) * eta,
-                        xi * eta,
-                        xi * (1 - eta),
-                        (1 - xi) * (1 - eta),
-                        xi * eta,
-                    ],
-                ]
-            )
-            / 4.0
-        )
-        return dN_dxi
+        """
+        Compute the derivatives of the shape functions for a 6-node wedge element
+        with respect to natural coordinates (xi, eta, zeta).
 
-    # Loop over Gauss points
-    for i, xi_pt in enumerate(gauss_points):
-        for j, eta_pt in enumerate(gauss_points):
-            for k, zeta_pt in enumerate(gauss_points):
-                # Gauss point weight
-                weight = weights[i] * weights[j] * weights[k]
+        Parameters:
+        - xi: float, natural coordinate xi
+        - eta: float, natural coordinate eta
+        - zeta: float, natural coordinate zeta
 
-                # Shape function derivatives in natural coordinates
-                dN_dxi = shape_function_derivatives(xi_pt, eta_pt, zeta_pt)
+        Returns:
+        - dN: np.ndarray (3, 6), derivatives of shape functions w.r.t. xi, eta, zeta
+        """
+        dN = np.zeros((3, 6))
+        # Bottom face
+        dN[0, 0] = -(1 - zeta)  # dN1/dxi
+        dN[1, 0] = -(1 - zeta)  # dN1/deta
+        dN[2, 0] = -(1 - xi - eta)  # dN1/dzeta
 
-                # Jacobian matrix
-                J = (
-                    dN_dxi @ nodes[:, :3]
-                )  # Only use the first 3 columns for positional coordinates
-                detJ = np.linalg.det(J)
-                if detJ <= 0:
-                    raise ValueError(
-                        "Jacobian determinant is non-positive. Check the element shape."
-                    )
+        dN[0, 1] = 1 - zeta  # dN2/dxi
+        dN[1, 1] = 0  # dN2/deta
+        dN[2, 1] = -xi  # dN2/dzeta
 
-                # Inverse Jacobian
-                J_inv = np.linalg.inv(J)
+        dN[0, 2] = 0  # dN3/dxi
+        dN[1, 2] = 1 - zeta  # dN3/deta
+        dN[2, 2] = -eta  # dN3/dzeta
 
-                # Shape function derivatives in global coordinates
-                dN_dx = J_inv @ dN_dxi
+        # Top face
+        dN[0, 3] = -zeta  # dN4/dxi
+        dN[1, 3] = -zeta  # dN4/deta
+        dN[2, 3] = 1 - xi - eta  # dN4/dzeta
 
-                # Strain-displacement matrix
-                B = np.zeros((6, 18))
-                for n in range(6):  # Loop over nodes
-                    B[0, n * 3] = dN_dx[0, n]
-                    B[1, n * 3 + 1] = dN_dx[1, n]
-                    B[2, n * 3 + 2] = dN_dx[2, n]
-                    B[3, n * 3] = dN_dx[1, n]
-                    B[3, n * 3 + 1] = dN_dx[0, n]
-                    B[4, n * 3 + 1] = dN_dx[2, n]
-                    B[4, n * 3 + 2] = dN_dx[1, n]
-                    B[5, n * 3] = dN_dx[2, n]
-                    B[5, n * 3 + 2] = dN_dx[0, n]
+        dN[0, 4] = zeta  # dN5/dxi
+        dN[1, 4] = 0  # dN5/deta
+        dN[2, 4] = xi  # dN5/dzeta
 
-                # Correctly assemble stiffness and strain-displacement matrices
-                for n1 in range(6):  # Loop over each node
-                    for n2 in range(6):  # Loop over coupling nodes
-                        # Indices for global stiffness matrix (translational DOFs only)
-                        idx1 = slice(n1 * 3, n1 * 3 + 3)
-                        idx2 = slice(n2 * 3, n2 * 3 + 3)
+        dN[0, 5] = 0  # dN6/dxi
+        dN[1, 5] = zeta  # dN6/deta
+        dN[2, 5] = eta  # dN6/dzeta
 
-                        # Use np.ix_ to map local stiffness contributions
-                        Ke[
-                            np.ix_(
-                                range(idx1.start, idx1.stop),
-                                range(idx2.start, idx2.stop),
-                            )
-                        ] += (
-                            weight
-                            * (B.T @ C @ B)[
-                                n1 * 3 : (n1 + 1) * 3, n2 * 3 : (n2 + 1) * 3
-                            ]
-                            * detJ
-                        )
+        return dN
 
-                        # Strain-displacement matrix
-                        Be[:, idx1] += weight * B[:, n1 * 3 : (n1 + 1) * 3] * detJ
+    # Number of integration points for triangular base and 1D extrusion
+    tri_points, tri_weights = gauss_points_2d(order=2)
+    z_points, z_weights = gauss_points_1d(order=2)
 
-    CBe = C @ Be  # Stress-displacement matrix
+    # Initialize stiffness matrix Ke and strain-displacement matrix Be
+    Ke = np.zeros((18, 18), dtype=np.float32)
+    Be = np.zeros((6, 18), dtype=np.float32)
+
+    for z, wz in zip(
+        z_points, z_weights
+    ):  # Loop over 1D (extrusion) integration points
+        for (xi, eta), wt in zip(
+            tri_points, tri_weights
+        ):  # Loop over 2D triangular points
+            dN_dxi = shape_function_derivatives(xi, eta, z)
+
+            # for i, xi_pt in enumerate(gauss_points):
+            #     for j, eta_pt in enumerate(gauss_points):
+            #         for k, zeta_pt in enumerate(gauss_points):
+            #             dN_dxi = shape_function_derivatives(xi_pt, eta_pt, zeta_pt)
+            # Shape function derivatives (linear basis functions)
+            J = dN_dxi @ nodes
+            detJ = np.linalg.det(J)
+            if detJ <= 0:
+                print(
+                    "Warning: Jacobian determinant is non-positive. It is likely something is wrong with the element geometry. Check the node order"
+                )
+                np_print("nodes", nodes)
+                # np_print("dN_dxi", dN_dxi)
+                # np_print("J", J)
+                np_print("detJ", detJ)
+                detJ = np.abs(detJ)
+                raise ValueError(
+                    "Jacobian determinant is non-positive, check element quality."
+                )
+            invJ = np.linalg.inv(J)
+
+            # Shape function derivatives in global coordinates
+            dN_dx = invJ @ dN_dxi
+
+            # Construct strain-displacement matrix B
+            for n in range(6):
+                Be[0, n * 3] = dN_dx[0, n]
+                Be[1, n * 3 + 1] = dN_dx[1, n]
+                Be[2, n * 3 + 2] = dN_dx[2, n]
+                Be[3, n * 3] = dN_dx[1, n]
+                Be[3, n * 3 + 1] = dN_dx[0, n]
+                Be[4, n * 3 + 1] = dN_dx[2, n]
+                Be[4, n * 3 + 2] = dN_dx[1, n]
+                Be[5, n * 3] = dN_dx[2, n]
+                Be[5, n * 3 + 2] = dN_dx[0, n]
+
+            # Integrate stiffness matrix
+            Ke += Be.T @ C @ Be * detJ * wz * wt
+
+    # Compute stress-displacement matrix CBe
+    CBe = C @ Be
+
     return Ke, Be, CBe
 
 
@@ -753,11 +988,11 @@ class Mesh:
                 self.constraints_vector.shape == self.nodes.shape
             ), "Constraints vector must have the same shape as the nodes."
 
-        if self.constraints_matrix is None:
-            self.constraints_matrix = np.eye(self.num_dofs)
-        else:
-            self.constraints_matrix = np.asarray(self.constraints_matrix)
-            assert self.constraints_matrix.shape == (self.num_dofs, self.num_dofs)
+        # if self.constraints_matrix is None:
+        #     self.constraints_matrix = np.eye(self.num_dofs)
+        # else:
+        #     self.constraints_matrix = np.asarray(self.constraints_matrix)
+        #     assert self.constraints_matrix.shape == (self.num_dofs, self.num_dofs)
 
         if self.forces is None:
             self.forces = np.zeros((self.nodes.shape), dtype=np.float32)
@@ -780,9 +1015,9 @@ class Mesh:
         if self.strain is not None:
             self.strain = np.asarray(self.strain)
         if self.von_mises_stress is not None:
-            self.von_mises_stress = np.asarray(self.von_mises_stress)
+            self.von_mises_stress = np.asarray(self.von_mises_stress, dtype=np.float32)
         if self.Kg is not None:
-            self.Kg = np.asarray(self.Kg)
+            self.Kg = np.asarray(self.Kg, dtype=np.float32)
 
     def _normalize_repeat_array(self, x, name, dtype, shape):
         x = np.asarray(x, dtype=dtype).reshape(shape)
@@ -793,7 +1028,7 @@ class Mesh:
         return np.repeat(x, self.num_elements // x.size)
 
     def assemble_global_tensors(self):
-        self.Kg = np.zeros((self.num_dofs, self.num_dofs))
+        self.Kg = np.zeros((self.num_dofs, self.num_dofs), dtype=np.float32)
 
         self.element_tensors = []
 

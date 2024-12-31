@@ -1,6 +1,7 @@
 import core
 import numpy as np
 import pyvista as pv
+from math import ceil
 
 np.set_printoptions(precision=3, linewidth=400, suppress=False)
 
@@ -254,11 +255,6 @@ def test_cantilever_truss():
     plotter.show()
 
 
-test_truss1()
-test_truss()
-test_cantilever_truss()
-
-
 def test_cantilever_beam():
     # Material and geometric properties
     E = 10_000_000_000  # Young's modulus in psi
@@ -314,12 +310,6 @@ def test_cantilever_beam():
 
     plotter.show_grid()
     plotter.show()
-
-
-# Doesn't work
-# test_cantilever_beam()
-
-from math import ceil
 
 
 def test_single_hex8():
@@ -504,7 +494,7 @@ def test_cantilever_beam_hex8():
     plotter.show()
 
 
-def test_prism6():
+def test_prism6_1elm():
     """
     Test function for the Mesh class using prism6 elements.
     """
@@ -512,60 +502,31 @@ def test_prism6():
     # Material and geometric properties
     E = 10_000_000  # Young's modulus in psi
     nu = 0.3  # Poisson's ratio
-    force = 1000  # Applied force in lbf
+    force = 100  # Applied force in lbf
 
-    # Define a small test mesh
-    x_size = 1.0
-    y_size = 1.0
-    z_size = 1.0
-    element_size = 0.5
+    #    2
+    #  / |
+    # 0--1
 
-    # 6--7--8
-    # |/ |/ |
-    # 3--4--5
-    # |/ |/ |
-    # 0--1--2...
-
-    n_elements_x = int(np.ceil(x_size / element_size))
-    n_elements_y = int(np.ceil(y_size / element_size))
-    n_elements_z = int(np.ceil(z_size / element_size))
-    n_nodes_x = n_elements_x + 1
-    n_nodes_y = n_elements_y + 1
-    n_nodes_z = n_elements_z + 1
-
-    x = np.linspace(0, x_size, n_nodes_x)
-    y = np.linspace(0, y_size, n_nodes_y)
-    z = np.linspace(0, z_size, n_nodes_z)
-    nodes = np.array(np.meshgrid(x, y, z)).T.reshape(-1, 3)
+    nodes = np.array(
+        [
+            [0, 0, 0],
+            [1, 0, 0],
+            [1, 1, 0],
+            [0, 0, 1],
+            [1, 0, 1],
+            [1, 1, 1],
+        ]
+    )
 
     print("nodes", nodes.shape, nodes, sep="\n")
 
-    # Generate prism6 elements (triangular prisms)
-    elements = []
-    for k in range(n_elements_z):  # Loop over Z layers (vertical stacking)
-        for j in range(n_elements_y - 1):  # Loop over Y layers (rows of triangles)
-            for i in range(
-                n_elements_x - 1
-            ):  # Loop over X layers (columns of triangles)
-                # Indices for the lower triangle
-                n0 = i + j * n_nodes_x + k * n_nodes_x * n_nodes_y
-                n1 = n0 + 1
-                n2 = n0 + n_nodes_x
-
-                # Indices for the upper triangle (directly above lower triangle)
-                n3 = n0 + n_nodes_x * n_nodes_y
-                n4 = n1 + n_nodes_x * n_nodes_y
-                n5 = n2 + n_nodes_x * n_nodes_y
-
-                # Define the prism element
-                elements.append([n0, n1, n2, n3, n4, n5])
-
-    elements = np.array(elements)
+    elements = np.array([[0, 1, 2, 3, 4, 5]])
     print("elements", elements.shape, elements, sep="\n")
 
     constraints = np.zeros(nodes.shape, dtype=np.int8)
     # Fix all translational DOFs at the bottom face
-    constraints[: n_nodes_x * n_nodes_y, :] = 1
+    constraints[:3, :] = 1
 
     print("constraints", constraints.shape, constraints, sep="\n")
     # Initialize the mesh
@@ -577,11 +538,8 @@ def test_prism6():
         constraints_vector=constraints,
     )
 
-    # Apply point load at the top center node
-    top_center_node = -1  # Assuming the last node is at the top center
-    mesh.forces[top_center_node, 1] = -force  # Apply force in the -Y direction
+    mesh.forces[-1, 1] = -force  # Apply force in the -Y direction
 
-    # Solve the system
     mesh.solve()
 
     # Visualization (optional)
@@ -590,7 +548,7 @@ def test_prism6():
 
     plotter.add_mesh(
         pvmesh,
-        scalars="von_mises_stress",
+        scalars="displacement",
         show_edges=True,
         cmap="viridis",
     )
@@ -603,9 +561,194 @@ def test_prism6():
     plotter.show_grid()
     plotter.show()
 
-    print("Prism6 mesh test passed successfully!")
+
+def test_prism6_2elm():
+    """
+    Test function for the Mesh class using prism6 elements.
+    """
+
+    # Material and geometric properties
+    E = 10_000_000  # Young's modulus in psi
+    nu = 0.3  # Poisson's ratio
+    force = 100  # Applied force in lbf
+
+    # 3--2
+    # |/ |
+    # 0--1
+
+    nodes = np.array(
+        [
+            [0, 0, 0],  # Node 0
+            [1, 0, 0],  # Node 1
+            [1, 1, 0],  # Node 2
+            [0, 1, 0],  # Node 3
+            [0, 0, 1],  # Node 4
+            [1, 0, 1],  # Node 5
+            [1, 1, 1],  # Node 6
+            [0, 1, 1],  # Node 7
+        ]
+    )
+
+    print("nodes", nodes.shape, nodes, sep="\n")
+
+    elements = np.array([[0, 1, 2, 4, 5, 6], [0, 2, 3, 4, 6, 7]])
+    print("elements", elements.shape, elements, sep="\n")
+
+    constraints = np.zeros(nodes.shape, dtype=np.int8)
+    # Fix all translational DOFs at the bottom face
+    constraints[:3, :] = 1
+
+    print("constraints", constraints.shape, constraints, sep="\n")
+    # Initialize the mesh
+    mesh = core.Mesh(
+        nodes=nodes,
+        elements=elements,
+        element_type=[core.ElementType.PRISM6],
+        element_properties=[[E, nu]],  # All elements share the same properties
+        constraints_vector=constraints,
+    )
+
+    mesh.forces[-1, 1] = -force  # Apply force in the -Y direction
+
+    mesh.solve()
+
+    # Visualization (optional)
+    plotter = pv.Plotter()
+    pvmesh = mesh.generate_pv_unstructured_mesh()
+
+    plotter.add_mesh(
+        pvmesh,
+        scalars="displacement",
+        show_edges=True,
+        cmap="viridis",
+    )
+    arrows = mesh.generate_pv_force_arrows()
+    plotter.add_mesh(
+        arrows,
+        color="red",
+    )
+
+    plotter.show_grid()
+    plotter.show()
 
 
-test_single_hex8()
-test_cantilever_beam_hex8()
-# test_prism6()
+def tube_prism6():
+    # Material and geometric properties
+    E = 10_000_000  # Young's modulus in psi
+    nu = 0.3  # Poisson's ratio
+    force = 100  # Applied force in lbf
+
+    outer_radius = 4.0
+    thickness = 0.2
+    inner_radius = outer_radius - thickness
+    height = 5.0
+
+    elm_size = 0.2
+
+    n_points = int(ceil(2 * np.pi * outer_radius / elm_size))
+    n_layers = int(ceil(height / elm_size))
+
+    # n_points = 40
+    # n_layers = 40
+
+    theta = np.linspace(0, 2 * np.pi, n_points, endpoint=False)
+    theta_out = theta
+    theta_out = theta + np.pi / n_points
+    theta_in = theta
+    # theta_in = theta - np.pi / n_points
+
+    outer_surface = np.array(
+        [[outer_radius * np.cos(t), outer_radius * np.sin(t), 0] for t in theta_out]
+    )
+
+    inner_surface = np.array(
+        [[inner_radius * np.cos(t), inner_radius * np.sin(t), 0] for t in theta_in]
+    )
+
+    # Initialize an empty list to hold nodes
+    nodes = []
+
+    # Generate layers by stacking surfaces along the z-axis
+    for z in np.linspace(0, height, n_layers + 1):
+        outer_layer = outer_surface.copy()
+        outer_layer[:, 2] = z  # Update z-coordinate
+        inner_layer = inner_surface.copy()
+        inner_layer[:, 2] = z  # Update z-coordinate
+        nodes.append(outer_layer)
+        nodes.append(inner_layer)
+
+    # Convert list of layers to a single numpy array
+    nodes = np.vstack(nodes)
+
+    elements = []
+    for layer in range(n_layers):
+        for i in range(n_points):
+            first_point_in_layer = layer * 2 * n_points
+            # Node indices for outer and inner layers
+            o0 = first_point_in_layer + i
+            o1 = (
+                first_point_in_layer + (i + 1) % n_points
+            )  # Wrap to the start of the layer
+            i0 = o0 + n_points
+            i1 = o1 + n_points
+
+            # Node indices for the next layer
+            o0_next = o0 + 2 * n_points
+            o1_next = o1 + 2 * n_points
+            i0_next = i0 + 2 * n_points
+            i1_next = i1 + 2 * n_points
+
+            # Add wedge elements (6-node elements)
+            elements.append([o0, o1, i1, o0_next, o1_next, i1_next])  # Outer wedge
+            elements.append([i1, i0, o0, i1_next, i0_next, o0_next])  # Inner wedge
+
+    # Convert elements to numpy array
+    elements = np.array(elements)
+
+    print("nodes", nodes.shape, nodes, sep="\n")
+    print("elements", elements.shape, elements, sep="\n")
+
+    constraints = np.zeros(nodes.shape, dtype=np.int8)
+    constraints[: 2 * n_points, :] = 1
+
+    print("constraints", constraints.shape, constraints, sep="\n")
+
+    mesh = core.Mesh(
+        nodes=nodes,
+        elements=elements,
+        element_type=[core.ElementType.PRISM6],
+        element_properties=[[E, nu]],  # All elements share the same properties
+        constraints_vector=constraints,
+    )
+
+    mesh.forces[
+        n_points * 2 * n_layers : n_points * 2 * (n_layers + 1), 1
+    ] = -force  # Apply force in the -Y direction
+
+    print(mesh.forces)
+
+    mesh.solve()
+
+    plotter = pv.Plotter()
+    m = mesh.generate_pv_unstructured_mesh()
+    plotter.add_mesh(m, show_edges=True, scalars="von_mises_stress", cmap="viridis")
+    m = mesh.generate_pv_force_arrows()
+    plotter.add_mesh(m, color="red")
+
+    poly = pv.PolyData(nodes)
+    poly["id"] = np.arange(len(nodes))
+    # plotter.add_point_labels(poly, "id")
+
+    plotter.show_grid()
+    plotter.show()
+
+
+# test_truss1()
+# test_truss()
+# test_cantilever_truss()
+# # test_cantilever_beam() # Doesn't work
+# test_single_hex8()
+# test_cantilever_beam_hex8()
+# test_prism6_1elm()
+# test_prism6_2elm()
+tube_prism6()
