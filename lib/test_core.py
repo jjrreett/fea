@@ -14,7 +14,7 @@ def test_truss1():
 
     force = 1000  # lbf
 
-    mesh = core.Mesh(
+    mesh = core.FEAModel(
         nodes=[
             [0, 0, 0],
             [0, 1, 0],
@@ -99,7 +99,7 @@ def test_truss():
 
     force = 100
 
-    mesh = core.Mesh(
+    mesh = core.FEAModel(
         nodes=[
             [0, 1, 0],
             [1, 0, 0],
@@ -181,7 +181,7 @@ def test_cantilever_truss():
     # | /| /
     # |/ |/
     # 1--3
-    mesh = core.Mesh(
+    mesh = core.FEAModel(
         nodes=[
             [0, 0, 0],  # Node 0: Fixed support
             [0, -24, 0],  # Node 1 : Fixed support
@@ -279,7 +279,7 @@ def test_cantilever_beam():
     constraints[0] = np.array([1, 1, 1, 1, 1, 1])
     print("constraints", constraints.shape, constraints, sep="\n")
 
-    mesh = core.Mesh(
+    mesh = core.FEAModel(
         nodes=nodes,
         elements=elements,
         element_type=[core.ElementType.BEAM2],
@@ -339,7 +339,7 @@ def test_single_hex8():
     print("elements", elements.shape, elements, sep="\n")
     print("constraints", constraints.shape, constraints, sep="\n")
 
-    mesh = core.Mesh(
+    mesh = core.FEAModel(
         nodes=nodes,
         elements=elements,
         element_type=[core.ElementType.HEX8],
@@ -432,7 +432,7 @@ def test_cantilever_beam_hex8():
     print("elements", elements.shape, elements, sep="\n")
     print("constraints", constraints.shape, constraints, sep="\n")
 
-    mesh = core.Mesh(
+    mesh = core.FEAModel(
         nodes=nodes,
         elements=elements,
         element_type=[core.ElementType.HEX8],
@@ -530,7 +530,7 @@ def test_prism6_1elm():
 
     print("constraints", constraints.shape, constraints, sep="\n")
     # Initialize the mesh
-    mesh = core.Mesh(
+    mesh = core.FEAModel(
         nodes=nodes,
         elements=elements,
         element_type=[core.ElementType.PRISM6],
@@ -600,7 +600,7 @@ def test_prism6_2elm():
 
     print("constraints", constraints.shape, constraints, sep="\n")
     # Initialize the mesh
-    mesh = core.Mesh(
+    mesh = core.FEAModel(
         nodes=nodes,
         elements=elements,
         element_type=[core.ElementType.PRISM6],
@@ -713,7 +713,7 @@ def tube_prism6():
 
     print("constraints", constraints.shape, constraints, sep="\n")
 
-    mesh = core.Mesh(
+    mesh = core.FEAModel(
         nodes=nodes,
         elements=elements,
         element_type=[core.ElementType.PRISM6],

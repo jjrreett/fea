@@ -878,7 +878,7 @@ def prism6_tensors(
 
 
 @dataclass
-class Mesh:
+class FEAModel:
     """
     Parameters
     ----------
@@ -1313,3 +1313,23 @@ class Mesh:
         arrows = self._gen_pv_arrows(self.nodes, self.forces, mag=scale_factor)
 
         return arrows
+
+
+# class Mesh:
+#     """
+#     Defines a 3D mesh for finite element analysis.
+
+#     Parameters
+#     ----------
+#     nodes : npt.ArrayLike[np.float32]
+#         Nx3 array where N is the number of nodes (control points). Most rows represent a node with 3 translational degrees of freedom (a point in space).
+#         Some [virtual] nodes will exist to represent 3 rotational degrees of freedom.
+#         The nodes array will be flattened into a neutral displacement vector.
+
+#     elements : sequence[sequence[int]]
+#         NxX array where each row is an index array referencing the nodes in the mesh.
+#         N is the number of elements the mesh and X is variable length depending on the cell type.
+#     """
+
+#     nodes: npt.NDArray[np.float32]
+#     elements: Sequence[Sequence[int]]

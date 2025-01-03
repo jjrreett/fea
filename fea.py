@@ -4,13 +4,16 @@ import numpy as np
 import matplotlib.pyplot as plt
 from utils import *
 
-np.set_printoptions(precision=5, linewidth=200, suppress=True)
+np.set_printoptions(precision=3, linewidth=400, suppress=True)
 
 
 psi = 6894.76
 lbf = 4.44822
 ft = 0.3048
 inch = 0.0254
+
+E = 10_000_000 * psi
+nu = 0.3
 
 n_elements_width = 4
 n_elements_height = 50
@@ -83,38 +86,6 @@ print("forces", forces.shape, forces, sep="\n")
 # plotter.show()
 
 
-def solve(nodes, elements, constraints, forces):
-    global_stiffness_matrix = np.zeros((nodes.size, nodes.size))
-
-    for element in elements:
-        elm_nodes = nodes[element]
-        elm_stiff_matrix = hexahedral_stiffness_matrix(elm_nodes, 10_000_000 * psi, 0.3)
-
-        dof_indices = np.array([i * 3 + j for i in element for j in range(3)])
-
-        # Assemble global stiffness matrix
-        idx = np.ix_(dof_indices, dof_indices)
-        global_stiffness_matrix[idx] += elm_stiff_matrix
-
-    free_dofs = np.where(constraints.flatten() == 0)[0]
-    # print("free_dofs", free_dofs, sep="\n")
-
-    reduced_K = global_stiffness_matrix[np.ix_(free_dofs, free_dofs)]
-    reduced_forces = forces.flatten()[free_dofs]
-
-    free_displacements = np.linalg.solve(reduced_K, reduced_forces)
-    # TODO iterative solver
-
-    # Reconstruct full displacement vector
-    displacements = np.zeros_like(nodes).flatten()
-    displacements[free_dofs] = free_displacements
-    displacements = displacements.reshape(nodes.shape)
-
-    forces = (global_stiffness_matrix @ displacements.flatten()).reshape(nodes.shape)
-
-    return displacements, forces
-
-
 # constrain the bottom faces in all axis
 constraints = np.zeros(nodes.shape, dtype=int)
 base_nodes = np.where(nodes[:, 2] == 0)[0]
@@ -123,12 +94,17 @@ constraints[base_nodes] = np.array([1, 1, 1])
 # forces = np.zeros(nodes.shape, dtype=float)
 # front_nodes = np.where(nodes[:, 1] == 0)[0]
 # forces[front_nodes] += np.array([0, force_per_element, 0])
-displacements, forces = solve(nodes, elements, constraints, forces)
+displacements, forces, strains, stresses, von_mises = solve(
+    nodes, elements, constraints, forces, E, nu
+)
 
 displaced_nodes = nodes + displacements * 100
 
 print("forces", forces / lbf, sep="\n")
 print("displacements", displacements / inch, sep="\n")
+print("strains", strains[0], sep="\n")
+print("stresses", stresses[0], sep="\n")
+print("von_mises", von_mises[0], sep="\n")
 
 
 plotter = pv.Plotter()
@@ -137,7 +113,8 @@ plot_mesh(
     plotter,
     displaced_nodes,
     elements,
-    displacements=displacements,
+    # displacements=displacements,
+    stresses=von_mises,
     scalars="colors",
     rgb=True,
     show_edges=True,

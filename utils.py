@@ -1,8 +1,13 @@
+from enum import Enum
+from typing import Iterable, Sequence, Optional
+from attr import dataclass
 import pyvista as pv
 
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from numpy.typing import ArrayLike
+from dataclasses import dataclass
 
 
 def plot_nodes(ax, nodes, **kwargs):
@@ -124,6 +129,47 @@ def plot_forces(ax, nodes, forces, scale=0.1, min_magnitude_resolution=1):
         )
 
 
+def shape_function_derivatives(xi, eta, zeta):
+    dN_dxi = (
+        np.array(
+            [
+                [
+                    -(1 - eta) * (1 - zeta),
+                    (1 - eta) * (1 - zeta),
+                    (1 + eta) * (1 - zeta),
+                    -(1 + eta) * (1 - zeta),
+                    -(1 - eta) * (1 + zeta),
+                    (1 - eta) * (1 + zeta),
+                    (1 + eta) * (1 + zeta),
+                    -(1 + eta) * (1 + zeta),
+                ],
+                [
+                    -(1 - xi) * (1 - zeta),
+                    -(1 + xi) * (1 - zeta),
+                    (1 + xi) * (1 - zeta),
+                    (1 - xi) * (1 - zeta),
+                    -(1 - xi) * (1 + zeta),
+                    -(1 + xi) * (1 + zeta),
+                    (1 + xi) * (1 + zeta),
+                    (1 - xi) * (1 + zeta),
+                ],
+                [
+                    -(1 - xi) * (1 - eta),
+                    -(1 + xi) * (1 - eta),
+                    -(1 + xi) * (1 + eta),
+                    -(1 - xi) * (1 + eta),
+                    (1 - xi) * (1 - eta),
+                    (1 + xi) * (1 - eta),
+                    (1 + xi) * (1 + eta),
+                    (1 - xi) * (1 + eta),
+                ],
+            ]
+        )
+        / 8.0
+    )
+    return dN_dxi
+
+
 def hexahedral_stiffness_matrix(nodes, E, nu):
     """
     Compute the stiffness matrix for an 8-node hexahedral element.
@@ -156,43 +202,103 @@ def hexahedral_stiffness_matrix(nodes, E, nu):
     Ke = np.zeros((24, 24))
 
     # Shape function derivatives in natural coordinates
-    def shape_function_derivatives(xi, eta, zeta):
+
+    # Loop over Gauss points
+    for i, xi_pt in enumerate(gauss_points):
+        for j, eta_pt in enumerate(gauss_points):
+            for k, zeta_pt in enumerate(gauss_points):
+                # Gauss point weight
+                weight = weights[i] * weights[j] * weights[k]
+
+                # Shape function derivatives in natural coordinates
+                dN_dxi = shape_function_derivatives(xi_pt, eta_pt, zeta_pt)
+
+                # Jacobian matrix
+                J = dN_dxi @ nodes
+                detJ = np.linalg.det(J)
+                print("Nodes", nodes.shape, nodes, sep="\n")
+                print(f"Gauss point (xi, eta, zeta): ({xi_pt}, {eta_pt}, {zeta_pt})")
+                print(f"Jacobian matrix J:\n{J}")
+                print(f"Determinant of Jacobian detJ: {detJ}")
+                if detJ <= 0:
+                    raise ValueError(
+                        "Jacobian determinant is non-positive. Check the element shape."
+                    )
+
+                # Inverse Jacobian
+                J_inv = np.linalg.inv(J)
+
+                # Shape function derivatives in global coordinates
+                dN_dx = J_inv @ dN_dxi
+
+                # Strain-displacement matrix B
+                B = np.zeros((6, 24))
+                for n in range(8):  # Loop over nodes
+                    B[0, n * 3] = dN_dx[0, n]
+                    B[1, n * 3 + 1] = dN_dx[1, n]
+                    B[2, n * 3 + 2] = dN_dx[2, n]
+                    B[3, n * 3] = dN_dx[1, n]
+                    B[3, n * 3 + 1] = dN_dx[0, n]
+                    B[4, n * 3 + 1] = dN_dx[2, n]
+                    B[4, n * 3 + 2] = dN_dx[1, n]
+                    B[5, n * 3] = dN_dx[2, n]
+                    B[5, n * 3 + 2] = dN_dx[0, n]
+
+                # Add contribution to stiffness matrix
+                Ke += weight * (B.T @ C @ B) * detJ
+
+    return Ke
+
+
+def wedge_stiffness_matrix(nodes, E, nu):
+    """
+    Compute the stiffness matrix for a 6-node wedge element.
+
+    Parameters:
+    - nodes: np.ndarray (6x3), nodal coordinates of the wedge in the global frame.
+    - E: float, Young's modulus of the material.
+    - nu: float, Poisson's ratio of the material.
+
+    Returns:
+    - Ke: np.ndarray (18x18), the element stiffness matrix.
+    """
+    # Gauss quadrature points and weights (2-point rule)
+    gauss_points = np.array([-1 / np.sqrt(3), 1 / np.sqrt(3)])
+    weights = np.array([1, 1])
+
+    # Material stiffness matrix (3D isotropic elasticity)
+    C = (E / ((1 + nu) * (1 - 2 * nu))) * np.array(
+        [
+            [1 - nu, nu, nu, 0, 0, 0],
+            [nu, 1 - nu, nu, 0, 0, 0],
+            [nu, nu, 1 - nu, 0, 0, 0],
+            [0, 0, 0, (1 - 2 * nu) / 2, 0, 0],
+            [0, 0, 0, 0, (1 - 2 * nu) / 2, 0],
+            [0, 0, 0, 0, 0, (1 - 2 * nu) / 2],
+        ]
+    )
+
+    # Initialize stiffness matrix
+    Ke = np.zeros((18, 18))
+
+    # Shape function derivatives in natural coordinates
+    def shape_function_derivatives_wedge(xi, eta, zeta):
         dN_dxi = (
             np.array(
                 [
+                    [-(1 - zeta), (1 - zeta), 0, -(1 + zeta), (1 + zeta), 0],
+                    [-(1 - zeta), 0, (1 - zeta), -(1 + zeta), 0, (1 + zeta)],
                     [
-                        -(1 - eta) * (1 - zeta),
-                        (1 - eta) * (1 - zeta),
-                        (1 + eta) * (1 - zeta),
-                        -(1 + eta) * (1 - zeta),
-                        -(1 - eta) * (1 + zeta),
-                        (1 - eta) * (1 + zeta),
-                        (1 + eta) * (1 + zeta),
-                        -(1 + eta) * (1 + zeta),
-                    ],
-                    [
-                        -(1 - xi) * (1 - zeta),
-                        -(1 + xi) * (1 - zeta),
-                        (1 + xi) * (1 - zeta),
-                        (1 - xi) * (1 - zeta),
-                        -(1 - xi) * (1 + zeta),
-                        -(1 + xi) * (1 + zeta),
-                        (1 + xi) * (1 + zeta),
-                        (1 - xi) * (1 + zeta),
-                    ],
-                    [
-                        -(1 - xi) * (1 - eta),
-                        -(1 + xi) * (1 - eta),
-                        -(1 + xi) * (1 + eta),
-                        -(1 - xi) * (1 + eta),
-                        (1 - xi) * (1 - eta),
-                        (1 + xi) * (1 - eta),
-                        (1 + xi) * (1 + eta),
-                        (1 - xi) * (1 + eta),
+                        -(1 - xi - eta),
+                        -(1 - xi - eta),
+                        -(1 - xi - eta),
+                        (1 - xi - eta),
+                        (1 - xi - eta),
+                        (1 - xi - eta),
                     ],
                 ]
             )
-            / 8.0
+            / 2.0
         )
         return dN_dxi
 
@@ -204,7 +310,7 @@ def hexahedral_stiffness_matrix(nodes, E, nu):
                 weight = weights[i] * weights[j] * weights[k]
 
                 # Shape function derivatives in natural coordinates
-                dN_dxi = shape_function_derivatives(xi_pt, eta_pt, zeta_pt)
+                dN_dxi = shape_function_derivatives_wedge(xi_pt, eta_pt, zeta_pt)
 
                 # Jacobian matrix
                 J = dN_dxi @ nodes
@@ -221,8 +327,8 @@ def hexahedral_stiffness_matrix(nodes, E, nu):
                 dN_dx = J_inv @ dN_dxi
 
                 # Strain-displacement matrix B
-                B = np.zeros((6, 24))
-                for n in range(8):  # Loop over nodes
+                B = np.zeros((6, 18))
+                for n in range(6):  # Loop over nodes
                     B[0, n * 3] = dN_dx[0, n]
                     B[1, n * 3 + 1] = dN_dx[1, n]
                     B[2, n * 3 + 2] = dN_dx[2, n]
@@ -353,11 +459,52 @@ Nodes: 1,2,3,4(bottom face, counter-clockwise) -> 5,6,7,8(top face, counter-cloc
 """
 
 
-def stack_faces_2d(nodes2d, faces2d, z_heights):
+    def stack_nodes(nodes2d, z_heights):
+        n_nodes_in_layer = nodes2d.shape[0]
+        n_layers = len(z_heights)
+        nodes3d = np.zeros((n_nodes_in_layer * n_layers, 3))
+
+        # Stack nodes in the z direction
+        for i, z in enumerate(z_heights):
+            local_nodes3d = np.hstack([nodes2d, np.full((n_nodes_in_layer, 1), z)])
+            nodes3d[i * n_nodes_in_layer : (i + 1) * n_nodes_in_layer] = local_nodes3d
+        return nodes3d
+
+
+def stack_index_array(elements2d, n_layers, n_nodes):
+    """
+    Takes a set of 2d elements and layers the elements in 3d. Assumes elements2d is a NxM array.
+
+    >>> stack_index_array([[0]], 1, 5)
+    [[0, 5]]
+
+    >>> stack_index_array([[1, 2, 3]], 2, 6)
+    [[1, 2, 3, 7, 8, 9],
+     [7, 8, 9, 13, 14, 15]]
+
+    """
+    elements3d = []
+    for i in range(n_layers):
+        bottom_element_start = i * n_nodes
+        top_element_start = (i + 1) * n_nodes
+        for element in elements2d:
+            bottom_element = element + bottom_element_start
+            top_element = element + top_element_start
+            elements3d.append(np.hstack([bottom_element, top_element]))
+    elements3d = np.array(elements3d)
+    return elements3d
+
+
+def stack_faces_2d(nodes2d, faces2d, z_heights, segments=None):
     n_nodes_in_layer = nodes2d.shape[0]
     n_layers = len(z_heights)
     nodes3d = np.zeros((n_nodes_in_layer * n_layers, 3))
     elements = []
+
+    if segments is not None:
+        n_segments_in_layer = segments.shape[0]
+        assert segments.shape[1] == 2
+        surfaces = np.zeros((n_segments_in_layer * n_layers - 1, 4))
 
     # Stack nodes in the z direction
     for i, z in enumerate(z_heights):
@@ -372,8 +519,39 @@ def stack_faces_2d(nodes2d, faces2d, z_heights):
             bottom_face = face + bottom_face_start
             top_face = face + top_face_start
             elements.append(np.hstack([bottom_face, top_face]))
+    elements = np.array(elements)
 
-    return nodes3d, np.array(elements)
+    # Create surfaces
+    # [[0,1],
+    #  [1,2]...]
+    # [[0,1,i,i+1]          # layer 1
+    #  [1,2,1+i,2+i]
+    #  [i,i+1,n*i,n*(i+1)], # layer n
+    #  [1+i,2+i,1+i*n,2+n*(i+1)]]
+
+    if segments is not None:
+        for i in range(n_layers - 1):
+            bottom_segment_start = i * n_nodes_in_layer
+            top_segment_start = (i + 1) * n_nodes_in_layer
+            for segment in segments:
+                bottom_segment = segment + bottom_segment_start
+                top_segment = segment + top_segment_start
+                surfaces.append(np.hstack([bottom_segment, top_segment]))
+        surfaces = np.array(elements)
+        # for i in range(n_layers - 1):
+        #     surfaces[i * n_segments_in_layer : (i + 1) * n_segments_in_layer, :] = (
+        #         np.hstack(
+        #             [
+        #                 segments + i * n_segments_in_layer,
+        #                 segments + (i + 1) * n_segments_in_layer,
+        #             ]
+        #         )
+        #     )
+
+        print(surfaces)
+
+        return nodes3d, elements, surfaces
+    return nodes3d, elements
 
 
 def faces_from_nodes2d(selection):
@@ -509,7 +687,7 @@ def plot_forces_pv(plotter, nodes, forces, scale=0.1, min_magnitude_resolution=1
         plotter.add_arrows(node, forces[i], mag=length, color=color)
 
 
-def plot_mesh(plotter, nodes, elements, displacements=None, **kwargs):
+def plot_mesh(plotter, nodes, elements, displacements=None, stresses=None, **kwargs):
     num_elements = elements.shape[0]
     cells = np.zeros((num_elements, 9), dtype=np.int32)
     cells[:, 0] = 8
@@ -529,6 +707,354 @@ def plot_mesh(plotter, nodes, elements, displacements=None, **kwargs):
 
         # Assign colors to the cells
         grid.cell_data["colors"] = colors
+    if stresses is not None:
+        norm = plt.Normalize(stresses.min(), stresses.max())
+        cmap = plt.get_cmap("viridis")
+        colors = cmap(norm(stresses))[:, :3]  # Get RGB values
+        grid.cell_data["colors"] = colors
 
     # Add the mesh to the plotter
     plotter.add_mesh(grid, **kwargs)
+
+
+def print_matrix(name):
+    print(name, eval(name), sep="\n")
+
+
+def compute_element_strain_stress(
+    nodes, displacements, elements, E, nu, return_gauss_points=False
+):
+    """
+    Compute strain, stress, and Von Mises stress for each element or Gauss point.
+
+    Parameters:
+    - nodes: np.ndarray (Nx3), nodal coordinates in global space.
+    - displacements: np.ndarray (Nx3), nodal displacement vector.
+    - elements: np.ndarray (Mx8), list of elements defined by nodal indices.
+    - E: float, Young's modulus.
+    - nu: float, Poisson's ratio.
+    - return_gauss_points: bool, if True return results at Gauss points, otherwise return averaged results for each element.
+
+    Returns:
+    - If return_gauss_points is True:
+        - strains: list of np.ndarray, strain tensors at Gauss points for each element.
+        - stresses: list of np.ndarray, stress tensors at Gauss points for each element.
+        - von_mises: list of np.ndarray, Von Mises stress at Gauss points for each element.
+    - If return_gauss_points is False:
+        - element_strains: np.ndarray (Mx6), strain tensor for each element.
+        - element_stresses: np.ndarray (Mx6), stress tensor for each element.
+        - element_von_mises: np.ndarray (M,), Von Mises stress for each element.
+    """
+    # Material stiffness matrix (3D isotropic elasticity)
+    C = (E / ((1 + nu) * (1 - 2 * nu))) * np.array(
+        [
+            [1 - nu, nu, nu, 0, 0, 0],
+            [nu, 1 - nu, nu, 0, 0, 0],
+            [nu, nu, 1 - nu, 0, 0, 0],
+            [0, 0, 0, (1 - 2 * nu) / 2, 0, 0],
+            [0, 0, 0, 0, (1 - 2 * nu) / 2, 0],
+            [0, 0, 0, 0, 0, (1 - 2 * nu) / 2],
+        ]
+    )
+
+    # Gauss quadrature points and weights (2-point rule)
+    gauss_points = np.array([-1 / np.sqrt(3), 1 / np.sqrt(3)])
+    weights = np.array([1, 1])
+
+    # Results storage
+    strains = []
+    stresses = []
+    von_mises = []
+
+    for element in elements:
+        elm_nodes = nodes[element]  # Extract node coordinates for the element
+        elm_displacements = displacements[
+            element
+        ].flatten()  # Displacements at element nodes
+
+        # Per Gauss point storage
+        if return_gauss_points:
+            elm_strain = []
+            elm_stress = []
+            elm_von_mises = []
+        else:
+            # For element-averaged values
+            total_strain = np.zeros(6)
+            total_stress = np.zeros(6)
+            total_von_mises = 0.0
+            total_weight = 0.0
+
+        # Loop over Gauss points
+        for i, xi_pt in enumerate(gauss_points):
+            for j, eta_pt in enumerate(gauss_points):
+                for k, zeta_pt in enumerate(gauss_points):
+                    # Gauss point weight
+                    weight = weights[i] * weights[j] * weights[k]
+
+                    # Shape function derivatives in natural coordinates
+                    dN_dxi = shape_function_derivatives(xi_pt, eta_pt, zeta_pt)
+
+                    # Jacobian matrix and inverse
+                    J = dN_dxi @ elm_nodes
+                    detJ = np.linalg.det(J)
+                    if detJ <= 0:
+                        raise ValueError(
+                            "Jacobian determinant is non-positive. Check the element shape."
+                        )
+                    J_inv = np.linalg.inv(J)
+
+                    # Shape function derivatives in global coordinates
+                    dN_dx = J_inv @ dN_dxi
+
+                    # Strain-displacement matrix B
+                    B = np.zeros((6, 24))
+                    for n in range(8):
+                        B[0, n * 3] = dN_dx[0, n]
+                        B[1, n * 3 + 1] = dN_dx[1, n]
+                        B[2, n * 3 + 2] = dN_dx[2, n]
+                        B[3, n * 3] = dN_dx[1, n]
+                        B[3, n * 3 + 1] = dN_dx[0, n]
+                        B[4, n * 3 + 1] = dN_dx[2, n]
+                        B[4, n * 3 + 2] = dN_dx[1, n]
+                        B[5, n * 3] = dN_dx[2, n]
+                        B[5, n * 3 + 2] = dN_dx[0, n]
+
+                    # Compute strain and stress at Gauss point
+                    strain = B @ elm_displacements
+                    stress = C @ strain
+
+                    # Compute Von Mises stress
+                    sxx, syy, szz, txy, tyz, tzx = stress
+                    von_mises_stress = np.sqrt(
+                        0.5 * ((sxx - syy) ** 2 + (syy - szz) ** 2 + (szz - sxx) ** 2)
+                        + 3 * (txy**2 + tyz**2 + tzx**2)
+                    )
+
+                    if return_gauss_points:
+                        # Store Gauss point results
+                        elm_strain.append(strain)
+                        elm_stress.append(stress)
+                        elm_von_mises.append(von_mises_stress)
+                    else:
+                        # Accumulate weighted values
+                        total_strain += strain * weight * detJ
+                        total_stress += stress * weight * detJ
+                        total_von_mises += von_mises_stress * weight * detJ
+                        total_weight += weight * detJ
+
+        if return_gauss_points:
+            strains.append(np.array(elm_strain))
+            stresses.append(np.array(elm_stress))
+            von_mises.append(np.array(elm_von_mises))
+        else:
+            # Average over Gauss points for the element
+            strains.append(total_strain / total_weight)
+            stresses.append(total_stress / total_weight)
+            von_mises.append(total_von_mises / total_weight)
+
+    if return_gauss_points:
+        return strains, stresses, von_mises
+    else:
+        return (
+            np.array(strains),
+            np.array(stresses),
+            np.array(von_mises),
+        )
+
+
+def solve(nodes, elements, constraints, forces):
+    global_stiffness_matrix = np.zeros((nodes.size, nodes.size))
+
+    for element in elements:
+        elm_nodes = nodes[element]
+        elm_stiff_matrix = hexahedral_stiffness_matrix(elm_nodes, 10_000_000 * psi, 0.3)
+
+        dof_indices = np.array([i * 3 + j for i in element for j in range(3)])
+
+        # Assemble global stiffness matrix
+        idx = np.ix_(dof_indices, dof_indices)
+        global_stiffness_matrix[idx] += elm_stiff_matrix
+
+    free_dofs = np.where(constraints.flatten() == 0)[0]
+    # print("free_dofs", free_dofs, sep="\n")
+
+    K = global_stiffness_matrix[np.ix_(free_dofs, free_dofs)]
+    f = forces.flatten()[free_dofs]
+
+    u = np.linalg.solve(K, f)
+
+    # Reconstruct full displacement vector
+    displacements = np.zeros_like(nodes).flatten()
+    displacements[free_dofs] = u
+    displacements = displacements.reshape(nodes.shape)
+
+    forces = (global_stiffness_matrix @ displacements.flatten()).reshape(nodes.shape)
+
+    return displacements, forces
+
+
+def solve(nodes, elements, constraints, forces, E, nu):
+    global_stiffness_matrix = np.zeros((nodes.size, nodes.size))
+
+    for element in elements:
+        elm_nodes = nodes[element]
+        elm_stiff_matrix = hexahedral_stiffness_matrix(elm_nodes, E, nu)
+
+        dof_indices = np.array([i * 3 + j for i in element for j in range(3)])
+
+        # Assemble global stiffness matrix
+        idx = np.ix_(dof_indices, dof_indices)
+        global_stiffness_matrix[idx] += elm_stiff_matrix
+
+    free_dofs = np.where(constraints.flatten() == 0)[0]
+
+    K = global_stiffness_matrix[np.ix_(free_dofs, free_dofs)]
+    f = forces.flatten()[free_dofs]
+
+    u = np.linalg.solve(K, f)
+
+    # Reconstruct full displacement vector
+    displacements = np.zeros_like(nodes).flatten()
+    displacements[free_dofs] = u
+    displacements = displacements.reshape(nodes.shape)
+
+    forces = (global_stiffness_matrix @ displacements.flatten()).reshape(nodes.shape)
+
+    # Compute strain, stress, and Von Mises stress
+    strains, stresses, von_mises = compute_element_strain_stress(
+        nodes, displacements, elements, E, nu
+    )
+
+    return displacements, forces, strains, stresses, von_mises
+
+
+def solve_wedge(nodes, elements, constraints, forces, E, nu):
+    global_stiffness_matrix = np.zeros((nodes.size, nodes.size))
+
+    for element in elements:
+        elm_nodes = nodes[element]
+        # elm_stiff_matrix = wedge_stiffness_matrix(elm_nodes, E, nu)
+        try:
+            elm_stiff_matrix = wedge_stiffness_matrix(elm_nodes, E, nu)
+        except ValueError as e:
+            print(f"Error with element {element}: {e}")
+            print(f"Element nodes: {elm_nodes}")
+            raise
+
+        dof_indices = np.array([i * 3 + j for i in element for j in range(3)])
+
+        # Assemble global stiffness matrix
+        idx = np.ix_(dof_indices, dof_indices)
+        global_stiffness_matrix[idx] += elm_stiff_matrix
+
+    free_dofs = np.where(constraints.flatten() == 0)[0]
+
+    K = global_stiffness_matrix[np.ix_(free_dofs, free_dofs)]
+    f = forces.flatten()[free_dofs]
+
+    u = np.linalg.solve(K, f)
+
+    # Reconstruct full displacement vector
+    displacements = np.zeros_like(nodes).flatten()
+    displacements[free_dofs] = u
+    displacements = displacements.reshape(nodes.shape)
+
+    forces = (global_stiffness_matrix @ displacements.flatten()).reshape(nodes.shape)
+
+    # Compute strain, stress, and Von Mises stress
+    strains, stresses, von_mises = compute_element_strain_stress(
+        nodes, displacements, elements, E, nu
+    )
+
+    return displacements, forces, strains, stresses, von_mises
+
+
+def circle(N, R, x=0, y=0):
+    i = np.arange(N)
+    theta = i * 2 * np.pi / N
+    pts = np.stack([np.cos(theta), np.sin(theta)], axis=1) * R
+    pts[:, 0] += x  # Adjust x coordinates
+    pts[:, 1] += y  # Adjust y coordinates
+    seg = np.stack([i, (i + 1) % N], axis=1)
+    return pts, seg
+
+
+def solve_fea(
+    nodes: Sequence[Sequence[np.float32]],
+    cells: Sequence[Sequence[np.int64]],
+    cell_type: Sequence[np.int8],
+    youngs_modulus: Sequence[np.float32],
+    poisson_ratio: Sequence[np.float32],
+    constrained_dofs: Sequence[Sequence[np.bool]],
+    forces: Sequence[Sequence[np.float32]],
+    constraints_matrix: np.ndarray = None,
+):
+    """
+    Parameters
+    ----------
+    nodes : sequence[sequence[float]]
+        Sequence of sequences of variable length. Each sub-vector fully describes the displacement of the node
+        and corresponds to the cell type's stiffness matrix. Nodes will be flattened into a displacement vector.
+
+    cells : sequence[int]
+        Array of cells. Each cell contains the number of points in the
+        cell and the node numbers of the cell.
+
+    cell_type : sequence[int]
+        Cell types of each cell. Each cell type number can be found from
+        vtk documentation. More efficient if using ``np.uint8``. See
+        example below.
+        If the length of the sequence is a fraction of the number of cells, the sequence will be repeated.
+
+    youngs_modulus : sequence[float]
+        Young's modulus of the material per cell.
+        If the length of the sequence is a fraction of the number of cells, the sequence will be repeated.
+
+    poisson_ratio : sequence[float]
+        Poisson's Ratio of the material per cell.
+        If the length of the sequence is a fraction of the number of cells, the sequence will be repeated.
+
+    constrained_dofs : sequence[bool]
+        Constrained degrees of freedom per node. A node is considered free if the value is False.
+        If the length of the sequence is a fraction of the number of nodes, the sequence will be repeated.
+
+    forces : sequence[float]
+        Sequence of sequences of force vectors corresponding to each node.
+        If the length of the sequence is a fraction of the number of nodes, the sequence will be repeated.
+
+    constraints_matrix : np.ndarray, optional
+        Matrix to map from a complete displacement vector (u) to a partial displacement vector,
+        assuming linear mapping. Default is None.
+    """
+    global_stiffness_matrix = np.zeros((nodes.size, nodes.size))
+
+    for element in elements:
+        elm_nodes = nodes[element]
+        elm_stiff_matrix = hexahedral_stiffness_matrix(elm_nodes, E, nu)
+
+        dof_indices = np.array([i * 3 + j for i in element for j in range(3)])
+
+        # Assemble global stiffness matrix
+        idx = np.ix_(dof_indices, dof_indices)
+        global_stiffness_matrix[idx] += elm_stiff_matrix
+
+    free_dofs = np.where(constraints.flatten() == 0)[0]
+
+    K = global_stiffness_matrix[np.ix_(free_dofs, free_dofs)]
+    f = forces.flatten()[free_dofs]
+
+    u = np.linalg.solve(K, f)
+
+    # Reconstruct full displacement vector
+    displacements = np.zeros_like(nodes).flatten()
+    displacements[free_dofs] = u
+    displacements = displacements.reshape(nodes.shape)
+
+    forces = (global_stiffness_matrix @ displacements.flatten()).reshape(nodes.shape)
+
+    # Compute strain, stress, and Von Mises stress
+    strains, stresses, von_mises = compute_element_strain_stress(
+        nodes, displacements, elements, E, nu
+    )
+
+    return displacements, forces, strains, stresses, von_mises

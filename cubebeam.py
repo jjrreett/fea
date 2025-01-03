@@ -11,11 +11,11 @@ lbf = 4.44822
 ft = 0.3048
 inch = 0.0254
 
-n_elements_width = 4
-n_elements_height = 50
+n_elements_width = 1
+n_elements_height = 1
 
-beam_width = 0.1
-beam_length = 1.0
+beam_width = 2
+beam_length = 2
 face_area = beam_width * beam_length
 linear_load = 100.0 * lbf / ft
 total_load = linear_load * beam_length
@@ -61,8 +61,9 @@ nodes2d, face2ds = generate_quad_grid(
     n_elements_width, n_elements_width, beam_width, beam_width
 )
 
+
 nodes, elements = stack_faces_2d(
-    nodes2d, face2ds, np.linspace(0, beam_length, n_elements_height)
+    nodes2d, face2ds, np.linspace(0, beam_length, (n_elements_height + 1))
 )
 
 
