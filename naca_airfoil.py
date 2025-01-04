@@ -5,8 +5,9 @@ def multiInterp(x, xp, fp):
     return np.array([np.interp(x, xp, fp[:, i]) for i in range(fp.shape[1])]).T
 
 
-def naca(t, p, m, k):
-    def C(x):
+def naca_funcs(p, m, k):
+    def cord(x):
+        x = np.asarray(x)
         result = np.zeros_like(x)
         mask1 = (x >= 0) & (x <= p)
         mask2 = (x > p) & (x <= 1)
@@ -16,7 +17,8 @@ def naca(t, p, m, k):
         )
         return result
 
-    def T(x):
+    def thickness(x):
+        x = np.asarray(x)
         return (
             5
             * k
@@ -29,13 +31,20 @@ def naca(t, p, m, k):
             )
         )
 
-    def C_d(x):
+    def dcord_dx(x):
+        x = np.asarray(x)
         result = np.zeros_like(x)
         mask1 = (x >= 0) & (x <= p)
         mask2 = (x > p) & (x <= 1)
         result[mask1] = (m / p**2) * (2 * p - 2 * x[mask1])
         result[mask2] = (m / (1 - p) ** 2) * (2 * p - 2 * x[mask2])
         return result
+
+    return cord, thickness, dcord_dx
+
+
+def naca(t, p, m, k):
+    cord, thickness, dcord_dx = naca_funcs(p, m, k)
 
     t[t >= 1] = (t - 1)[t >= 1]
     t[t < 0] = (t + 1)[t < 0]
@@ -48,12 +57,12 @@ def naca(t, p, m, k):
     out = np.zeros((len(t), 2))
 
     # Precompute C, T, and C_d
-    Cup = C(xup)
-    Clow = C(xlow)
-    Tup = T(xup)
-    Tlow = T(xlow)
-    Cdup = C_d(xup)
-    Cdlow = C_d(xlow)
+    Cup = cord(xup)
+    Clow = cord(xlow)
+    Tup = thickness(xup)
+    Tlow = thickness(xlow)
+    Cdup = dcord_dx(xup)
+    Cdlow = dcord_dx(xlow)
 
     out[upper_mask, 0] = xup - Tup * Cdup / np.sqrt(1 + Cdup**2)
     out[upper_mask, 1] = Cup + Tup / np.sqrt(1 + Cdup**2)
@@ -91,6 +100,28 @@ def naca_points(n_points, p, m, k, debug=False, return_t_points=False):
         return vertices, t
     else:
         return vertices
+
+
+def naca_cutouts(p, m, k, num_cutouts, web):
+    C, T, C_d = naca_funcs(p, m, k)
+    # Transforming circles_x to match thickness spacing
+    circles_x = [0.1]  # Start point for circles
+    for _ in range(1, num_cutouts):
+        prev_x = circles_x[-1]
+        local_thickness = T(prev_x)
+        next_thickness = local_thickness
+
+        for _ in range(10):
+            next_x = prev_x + local_thickness + next_thickness - web
+            next_thickness = T(next_x)
+
+        circles_x.append(next_x)
+
+    circles_x = np.array(circles_x)
+    circles_y = C(circles_x)
+    circles_r = T(circles_x) - web
+
+    return circles_x, circles_y, circles_r
 
 
 if __name__ == "__main__":
