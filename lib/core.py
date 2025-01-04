@@ -10,6 +10,7 @@ import pyvista as pv
 from scipy.sparse import lil_matrix, csr_matrix
 from scipy.sparse.linalg import spsolve, cg
 from tqdm import tqdm
+from scipy.sparse.linalg import cg, spsolve, spilu, LinearOperator
 
 element_tensor_functions = {}
 NODES_WIDTH = 3
@@ -1152,7 +1153,74 @@ class FEAModel:
         self.compute_von_mises_stress()
         debug_np_print("Mesh.von_mises_stress", self.von_mises_stress)
 
-    def generate_pv_unstructured_mesh(self):
+    def solve_precondition(self, use_iterative_solver=False, **args):
+        start = time.time()
+        debug_print("Start of stiffness matrix assembly")
+        self.assemble_global_tensors()
+        debug_print(
+            f"End of stiffness matrix assembly, elapsed time: {time.time() - start}"
+        )
+
+        # Determine free degrees of freedom
+        free_dofs = np.where(self.constraints_vector.flatten() == 0)[0]
+
+        # Extract reduced stiffness matrix and force vector
+        K = self.Kg[free_dofs, :][:, free_dofs]
+        f = self.forces.flatten()[free_dofs]
+
+        # Debug sparse memory usage
+        debug_print(f"Memory usage of K reduced: {K.data.nbytes / 1024} kb")
+
+        # Solve the linear system
+        start = time.time()
+        debug_print("Start of solve")
+
+        if use_iterative_solver:
+            # Iterative solver (Conjugate Gradient) with Jacobi Preconditioning
+            debug_print("Using iterative solver (Conjugate Gradient)")
+
+            # Jacobi preconditioner (diagonal scaling)
+            debug_print("Creating Jacobi preconditioner")
+            diag = K.diagonal()  # Extract diagonal
+            if np.any(diag == 0):
+                raise ValueError(
+                    "Jacobi preconditioner failed: matrix has zero diagonal entries."
+                )
+
+            # Create the preconditioner as a LinearOperator
+            M = LinearOperator(K.shape, matvec=lambda x: x / diag, dtype=np.float32)
+
+            u, info = cg(K, f, M=M, **args)
+            if info != 0:
+                raise ValueError(f"Conjugate Gradient did not converge, info: {info}")
+        else:
+            # Direct solver
+            debug_print("Using direct solver (spsolve)")
+            u = spsolve(K, f)
+
+        debug_print(f"End of solve, elapsed time: {time.time() - start}")
+
+        # Reconstruct full displacement vector
+        displacements = np.zeros((self.num_dofs,), dtype=np.float32)
+        displacements[free_dofs] = u
+        self.displacement_vector = displacements.reshape(self.nodes.shape)
+        debug_np_print("Mesh.displacement_vector", self.displacement_vector)
+
+        # Compute forces (Kg is sparse, @ is efficient for sparse matrices)
+        forces = (self.Kg @ displacements.flatten()).reshape(self.nodes.shape)
+        self.forces = forces
+        debug_np_print("Mesh.forces", self.forces)
+
+        # Compute strains and stresses
+        self.compute_element_strain_stress()
+        debug_np_print("Mesh.element_strains", self.element_strains)
+        debug_np_print("Mesh.element_stresses", self.element_stresses)
+
+        # Compute von Mises stress
+        self.compute_von_mises_stress()
+        debug_np_print("Mesh.von_mises_stress", self.von_mises_stress)
+
+    def generate_pv_unstructured_mesh(self, displacement_scale=1.0):
         """
         cells : sequence[int]
             Array of cells.  Each cell contains the number of points in the
@@ -1205,7 +1273,7 @@ class FEAModel:
         cells = [item for sublist in cells for item in sublist]
         cell_type = [cell_type_map[cell_type] for cell_type in self.element_type]
         points = (
-            self.nodes + self.displacement_vector**100
+            self.nodes + self.displacement_vector * displacement_scale
         )  # TODO figure out a better way for amplifying displacements for rendering
 
         # Create the spatial reference
