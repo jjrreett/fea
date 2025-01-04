@@ -16,6 +16,13 @@ def circle(N, R, x=0, y=0, theta_offset=0):
         y coordinate of the center
     theta_offset : float
         Offset angle in radians
+
+    Returns
+    -------
+    pts : ndarray
+        2d coordinates of the points
+    seg : ndarray
+        2d segments of the circle
     """
     theta = np.linspace(0, 2 * np.pi, N, endpoint=False) + theta_offset
     pts = np.stack([np.cos(theta), np.sin(theta)], axis=1) * R
