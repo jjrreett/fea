@@ -5,6 +5,7 @@ import triangle as tr
 import numpy.typing as npt
 from naca_airfoil import naca_points, naca_cutouts
 import matplotlib.pyplot as plt
+from lib import core
 
 from lib.geometry import circle
 
@@ -125,7 +126,7 @@ class Geometry:
         mid_points = np.mean(points, axis=1)
         return mid_points
 
-    def new_mesh_from_geometry(self):
+    def new_mesh_from_geometry(self) -> tuple[Mesh, "Geometry"]:
         flat_cells = [c for cell in self.cells for c in cell]
         unique_point_idxs, unique_point_idxs_map = np.unique(
             flat_cells, return_inverse=True
@@ -152,7 +153,7 @@ class Geometry:
         return m, g
 
 
-def layer_points(points, z_heights):
+def layer_points(points, z_heights) -> npt.NDArray:
     points = np.asarray(points)
     n_points = len(points)
     points = np.tile(points, (len(z_heights), 1))
@@ -161,7 +162,7 @@ def layer_points(points, z_heights):
     return points
 
 
-def layer_geometry(geometry, z_heights):
+def layer_geometry(geometry, z_heights) -> list[Geometry]:
     # Assume the mesh points are already layered
     n_points_per_layer = len(geometry.mesh.points) // len(z_heights)
 
@@ -174,7 +175,7 @@ def layer_geometry(geometry, z_heights):
     return geometries
 
 
-def extrude_geometry(geometry: Geometry, z_heights):
+def extrude_geometry(geometry: Geometry, z_heights) -> Geometry:
     n_points_per_layer = len(geometry.mesh.points) // len(z_heights)
 
     new_cells = []
@@ -206,7 +207,7 @@ def extrude_geometry(geometry: Geometry, z_heights):
     return new_geometry
 
 
-def compute_area_normals(geometry):
+def compute_area_normals(geometry) -> npt.NDArray:
     area_normals = []
 
     for cell_type, cell in zip(geometry.cell_types, geometry.cells):
@@ -381,7 +382,7 @@ cord = mesh.new_geometry(
 )
 
 
-wing_length = 8 * 12
+wing_length = 1 * 12
 element_length = 3
 num_elements = wing_length // element_length
 z_heights = np.linspace(0, 2, 3)
@@ -389,7 +390,10 @@ z_heights = np.linspace(0, wing_length, num_elements + 1)
 mesh.points = layer_points(mesh.points, z_heights)
 
 cords = layer_geometry(cord, z_heights)
-# spar_cutouts = layer_geometry(spar_cutout, z_heights)
+spar_cutout = [cell[0] for cell in spar_cutouts[0].cells]
+# print("spar_cutout", spar_cutout, sep="\n")
+g = mesh.new_geometry(cells=[spar_cutout], cell_types=[pv.CellType.LINE])
+spar_cutouts = layer_geometry(g, z_heights)
 
 wing_surface = extrude_geometry(airfoil, z_heights)
 wing_volume = extrude_geometry(airfoil_face, z_heights)
@@ -454,6 +458,81 @@ mesh, wing_volume = wing_volume.new_mesh_from_geometry()
 # plotter.show()
 
 points = np.array(mesh.points, dtype=np.float32)
+forces = np.array(mesh.point_data["forces"], dtype=np.float32)
+
+constraints = np.zeros_like(points)
+# constrain points on the z=0 plane
+constraints[np.where(points[:, 2] == 0)] = 1
+
+elements = wing_volume.cells
+element_types = [core.ElementType.PRISM6] * len(elements)
+
+foam_E = 1000  # Young's modulus in psi
+foam_nu = 0.0  # Poisson's ratio
+element_properties = [(foam_E, foam_nu)] * len(elements)
+
+
+# ADD WING SPAR
+spar_points = []
+spar_loc = (circles_x[0], circles_y[0])
+spar_radius = circles_r[0]
+rigid_elements = []
+spar_elements = []
+spar_constraints = []
+idx = len(points)
+for i, geo in enumerate(spar_cutouts):
+    z = np.unique(geo.get_cell_midpoints()[:, 2])
+    assert len(z) == 1
+    z = z[0]
+    # Add the center point
+    spar_points.append([circles_x[0], circles_y[0], z])
+    # add the rotation point
+    spar_points.append([0, 0, 0])
+
+    # complete the element
+    e = [idx, idx + 1]
+    e.extend(geo.cells[0])
+    # print("geo.cells", geo.cells, geo.cell_types, sep="\n")
+    rigid_elements.append(e)
+
+    if i != 0:
+        spar_elements.append([idx - 2, idx - 1, idx - 0, idx + 1])
+        spar_constraints.append([0, 0, 0])
+        spar_constraints.append([0, 0, 0])
+    else:
+        spar_constraints.append([1, 1, 1])
+        spar_constraints.append([1, 1, 1])
+
+    idx += 2
+
+print("rigid_elements", rigid_elements, sep="\n")
+print("spar_elements", spar_elements, sep="\n")
+print("spar_constraints", spar_constraints, sep="\n")
+
+# exit()
+points = np.vstack((points, np.array(spar_points, dtype=np.float32)))
+forces = np.vstack((forces, np.zeros_like(spar_points, dtype=np.float32)))
+constraints = np.vstack((constraints, np.array(spar_constraints)))
+
+assert constraints.shape == points.shape
+assert forces.shape == points.shape
+elements.extend(rigid_elements)
+element_types.extend([core.ElementType.RIGID] * len(rigid_elements))
+element_properties.extend([tuple()] * len(rigid_elements))
+
+elements.extend(spar_elements)
+element_types.extend([core.ElementType.BEAM2] * len(spar_elements))
+
+alum_E = 10_000_000
+alum_nu = 0.3
+
+from lib.geometry import second_moment_of_area_tube
+
+Izz, Iyy, Ixx, A = second_moment_of_area_tube(2, 0.065)
+
+element_properties.extend([(alum_E, alum_nu, Iyy, Izz, A, Ixx, 0)] * len(spar_elements))
+
+
 constraints = np.zeros_like(points)
 
 # constrain points on the z=0 plane
@@ -463,20 +542,17 @@ constraints[np.where(points[:, 2] == 0)] = 1
 E = 1000  # Young's modulus in psi
 nu = 0.3  # Poisson's ratio
 725.189
-from lib import core
 
 core.DEBUG = True
 feamesh = core.FEAModel(
     nodes=points,
-    elements=wing_volume.cells,
-    element_type=[core.ElementType.PRISM6],
-    element_properties=[[E, nu]],  # All elements share the same properties
+    elements=elements,
+    element_type=element_types,
+    element_properties=element_properties,
     constraints_vector=constraints,
+    forces=forces,
 )
 
-feamesh.forces = np.array(mesh.point_data["forces"], dtype=np.float32)
-
-print(feamesh.forces)
 
 import inspect
 
@@ -499,9 +575,7 @@ def callback_maker(iters=10):
     return callback
 
 
-feamesh.solve_precondition(
-    use_iterative_solver=True, callback=callback_maker(100), rtol=1e-4
-)
+feamesh.solve(use_iterative_solver=True, callback=callback_maker(100), rtol=1e-4)
 
 plotter = pv.Plotter()
 m = feamesh.generate_pv_unstructured_mesh()

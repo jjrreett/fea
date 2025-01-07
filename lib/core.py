@@ -743,6 +743,8 @@ class FEAModel:
             total=self.num_elements,
             desc="Assembling global tensors",
         ):
+            if element_type == ElementType.RIGID:
+                continue
             element_tensor = ElementType.element_tensors(
                 element_type, self.nodes[element], *properties
             )
@@ -800,7 +802,75 @@ class FEAModel:
             )
             self.von_mises_stress[i] = von_mises
 
-    def solve(self, use_iterative_solver=False, **args):
+    def assemble_constraint_jacobian(self):
+        rigid_elements = []
+        for element, element_type in zip(self.elements, self.element_type):
+            if element_type != ElementType.RIGID:
+                continue
+            rigid_elements.append(element)
+            print("Rigid element", element_type, element, sep="\n")
+            # print("Rigid element", element_type, element, self.nodes[element], sep="\n")
+
+        # Calculate the number of constraints
+        n_constraints = 0
+        for element in rigid_elements:
+            _, _, *daughter_translations = self.nodes[element]
+            n_constraints += 3 * len(daughter_translations)
+
+        n_dofs = self.nodes.size
+        # Use LIL format for efficient row-based sparse matrix assembly
+        G = scipy.sparse.lil_matrix((n_constraints, n_dofs))
+
+        # Populate the constraint Jacobian for all rigid elements
+        constraint_row = 0
+        for element in rigid_elements:
+            origin_translation, origin_rotation, *daughter_translations = self.nodes[
+                element
+            ]
+            (
+                origin_translation_node_idx,
+                origin_rotation_node_idx,
+                *daughter_translation_node_idxs,
+            ) = element
+
+            for idx, (daughter_translation, daughter_node_idx) in enumerate(
+                zip(daughter_translations, daughter_translation_node_idxs)
+            ):
+                idx3 = constraint_row * 3  # Row offset for current constraint
+
+                # Translation constraints
+                G[
+                    idx3 : idx3 + 3,
+                    3 * origin_translation_node_idx : 3 * origin_translation_node_idx
+                    + 3,
+                ] = -np.eye(3)
+                G[
+                    idx3 : idx3 + 3,
+                    3 * daughter_node_idx : 3 * daughter_node_idx + 3,
+                ] = np.eye(3)
+
+                # Rotational constraints
+                r = daughter_translation - origin_translation
+                rot = np.array(
+                    [
+                        [0, -r[2], r[1]],
+                        [r[2], 0, -r[0]],
+                        [-r[1], r[0], 0],
+                    ]
+                )
+                G[
+                    idx3 : idx3 + 3,
+                    3 * origin_rotation_node_idx : 3 * origin_rotation_node_idx + 3,
+                ] = -rot
+
+                constraint_row += (
+                    1  # Move to the next set of rows for the next constraint
+                )
+
+        # Convert G to CSR format for efficient operations
+        return G.tocsr()
+
+    def solve(self, use_iterative_solver=False, use_preconditioner=True, **args):
         start = time.time()
         debug_print("Start of stiffness matrix assembly")
         self.assemble_global_tensors()
@@ -811,36 +881,74 @@ class FEAModel:
         assert self.forces.shape == self.nodes.shape
         assert self.constraints_vector.shape == self.nodes.shape
 
-        # Determine free degrees of freedom
-        free_dofs = np.where(self.constraints_vector.flatten() == 0)[0]
+        # Apply rigid constraints
+        G_sparse = self.assemble_constraint_jacobian()
 
-        # Extract reduced stiffness matrix and force vector
-        K = self.Kg[free_dofs, :][:, free_dofs]
-        f = self.forces.flatten()[free_dofs]
+        n_constraints = G_sparse.shape[0]
 
-        # Debug sparse memory usage
-        debug_print(f"Memory usage of K reduced: {K.data.nbytes / 1024} kb")
+        # Assemble full augmented matrix as sparse
+        n_dofs = self.Kg.shape[0]
+        K = self.Kg  # Global stiffness matrix (already sparse)
 
-        # Solve the linear system
+        # Assemble the augmented matrix A
+        top = scipy.sparse.hstack([K, G_sparse.T])  # [K | G^T]
+        bottom = scipy.sparse.hstack(
+            [G_sparse, scipy.sparse.csr_matrix((n_constraints, n_constraints))]
+        )  # [G | 0]
+        A = scipy.sparse.vstack([top, bottom])  # Combine the rows: [K | G^T; G | 0]
+        A = A.tocsr()  # Convert to CSR format for efficient operations
+
+        # Assemble the right-hand side vector b
+        b = np.zeros(A.shape[0])
+        b[:n_dofs] = self.forces.flatten()  # External forces
+
+        # Drop fixed DOFs from the augmented system
+        fixed_dofs = np.where(self.constraints_vector.flatten() == 1)[0]
+        active_dofs = np.setdiff1d(np.arange(n_dofs), fixed_dofs)
+
+        # Reduce the augmented system
+        free_augmented_dofs = np.concatenate(
+            [active_dofs, np.arange(n_dofs, A.shape[0])]
+        )  # Include constraint rows
+        A_reduced = A[free_augmented_dofs, :][:, free_augmented_dofs]
+        b_reduced = b[free_augmented_dofs]
+
+        # Solve the reduced system
         start = time.time()
         debug_print("Start of solve")
 
         if use_iterative_solver:
             # Iterative solver (Conjugate Gradient)
             debug_print("Using iterative solver (Conjugate Gradient)")
-            u, info = scipy.sparse.linalg.cg(K, f, **args)
+            if use_preconditioner:
+                debug_print("Creating Jacobi preconditioner")
+                diag = A_reduced.diagonal()  # Extract diagonal
+                if np.any(diag == 0):
+                    debug_np_print("A_reduced", A_reduced)
+
+                    raise ValueError(
+                        "Jacobi preconditioner failed: matrix has zero diagonal entries."
+                    )
+
+                # Create the preconditioner as a scipy.sparse.linalg.LinearOperator
+                M = scipy.sparse.linalg.LinearOperator(
+                    A_reduced.shape, matvec=lambda x: x / diag, dtype=np.float32
+                )
+                u, info = scipy.sparse.linalg.cg(A_reduced, b_reduced, M=M, **args)
+            else:
+                u, info = scipy.sparse.linalg.cg(A_reduced, b_reduced, **args)
             if info != 0:
                 raise ValueError(f"Conjugate Gradient did not converge, info: {info}")
         else:
             # Direct solver
             debug_print("Using direct solver (scipy.sparse.linalg.spsolve)")
-            u = scipy.sparse.linalg.spsolve(K, f)
+            u = scipy.sparse.linalg.spsolve(A_reduced, b_reduced)
 
         debug_print(f"End of solve, elapsed time: {time.time() - start}")
 
         # Reconstruct full displacement vector
-        displacements = np.zeros((self.num_dofs,), dtype=np.float32)
-        displacements[free_dofs] = u
+        displacements = np.zeros((n_dofs,), dtype=np.float32)
+        displacements[active_dofs] = u[: len(active_dofs)]
         self.displacement_vector = displacements.reshape(self.nodes.shape)
         debug_np_print("Mesh.displacement_vector", self.displacement_vector)
 
