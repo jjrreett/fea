@@ -743,12 +743,125 @@ def tube_prism6():
     plotter.show()
 
 
-# test_truss1()
-# test_truss()
-# test_cantilever_truss()
-# # test_cantilever_beam() # Doesn't work
-# test_single_hex8()
-# test_cantilever_beam_hex8()
-# test_prism6_1elm()
-# test_prism6_2elm()
-tube_prism6()
+def test_beam_point_load():
+    wy = 4
+    wz = 1
+    # R = 1  # in
+    E = 10_000_000
+    nu = 0.3
+
+    from geometry import second_moment_of_rect
+
+    Izz, Iyy, J, A = second_moment_of_rect(wy, wz)
+    print("Izz, Iyy, J, A", Izz, Iyy, J, A)
+    L = 10
+    theta = 0
+    L = 16 * 12  # in
+    w = 160  # lb
+
+    dy = w * L**3 / (3 * E * Iyy)
+    n_elements = 100
+    n_nodes = n_elements + 1
+    x = np.linspace(0, L, n_nodes)
+    nodes = np.hstack([x.reshape(-1, 1), np.zeros((n_nodes, 2))])
+    rot_nodes = np.zeros_like(nodes)
+    nodes = np.vstack([nodes, rot_nodes])
+    # print("nodes", nodes.shape, nodes, sep="\n")
+    forces = np.zeros_like(nodes)
+    forces[n_nodes - 1, 1] = +w
+    # print("forces", forces.shape, forces, sep="\n")
+
+    constraints = np.zeros_like(nodes)
+    constraints[0, :] = 1
+    constraints[n_nodes, :] = 1
+    # print("constraints", constraints.shape, constraints, sep="\n")
+
+    elements = [[i, i + n_nodes, i + 1, i + n_nodes + 1] for i in range(n_elements)]
+    # print("elements", elements, sep="\n")
+
+    # core.DEBUG = True
+    fea = core.FEAModel(
+        nodes,
+        elements,
+        element_type=[core.ElementType.BEAM2],
+        element_properties=[(E, nu, Iyy, Izz, A, J, 0)],
+        forces=forces,
+        constraints_vector=constraints,
+    )
+
+    fea.solve()
+
+    print("dy", dy)
+    print("displacement", fea.displacement_vector[n_nodes - 1, 1], sep="\n")
+
+    assert np.isclose(dy, fea.displacement_vector[n_nodes - 1, 1], atol=1e-1)
+
+
+def test_beam_distributed_load():
+    wy = 4
+    wz = 1
+    # R = 1  # in
+    E = 10_000_000
+    nu = 0.3
+
+    from geometry import second_moment_of_rect
+
+    Izz, Iyy, J, A = second_moment_of_rect(wy, wz)
+    print("Izz, Iyy, J, A", Izz, Iyy, J, A)
+    L = 10
+    theta = 0
+    L = 16 * 12  # in
+    w = 160  # lb
+    # Uniform load
+    q = w / L
+    print("q", q)
+    dy = q * L**4 / (8 * E * Iyy)
+    n_elements = 100
+    n_nodes = n_elements + 1
+    x = np.linspace(0, L, n_nodes)
+    nodes = np.hstack([x.reshape(-1, 1), np.zeros((n_nodes, 2))])
+    rot_nodes = np.zeros_like(nodes)
+    nodes = np.vstack([nodes, rot_nodes])
+    # print("nodes", nodes.shape, nodes, sep="\n")
+    forces = np.zeros_like(nodes)
+    # forces[n_nodes - 1, 1] = +w
+    forces[:n_nodes, 1] = w / (n_nodes - 1)
+    # print("forces", forces.shape, forces, sep="\n")
+
+    constraints = np.zeros_like(nodes)
+    constraints[0, :] = 1
+    constraints[n_nodes, :] = 1
+    # print("constraints", constraints.shape, constraints, sep="\n")
+
+    elements = [[i, i + n_nodes, i + 1, i + n_nodes + 1] for i in range(n_elements)]
+    # print("elements", elements, sep="\n")
+
+    # core.DEBUG = True
+    fea = core.FEAModel(
+        nodes,
+        elements,
+        element_type=[core.ElementType.BEAM2],
+        element_properties=[(E, nu, Iyy, Izz, A, J, 0)],
+        forces=forces,
+        constraints_vector=constraints,
+    )
+
+    fea.solve()
+
+    print("dy", dy)
+    print("displacement", fea.displacement_vector[n_nodes - 1, 1], sep="\n")
+
+    assert np.isclose(dy, fea.displacement_vector[n_nodes - 1, 1], atol=1e-1)
+
+
+test_truss1()
+test_truss()
+test_cantilever_truss()
+# test_cantilever_beam() # Doesn't work
+test_single_hex8()
+test_cantilever_beam_hex8()
+test_prism6_1elm()
+test_prism6_2elm()
+# tube_prism6()
+test_beam_point_load()
+test_beam_distributed_load()
