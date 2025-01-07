@@ -7,10 +7,11 @@ import time
 import numpy as np
 import numpy.typing as npt
 import pyvista as pv
-from scipy.sparse import lil_matrix, csr_matrix
-from scipy.sparse.linalg import spsolve, cg
 from tqdm import tqdm
-from scipy.sparse.linalg import cg, spsolve, spilu, LinearOperator
+
+import scipy.sparse
+import scipy.sparse.linalg
+
 
 element_tensor_functions = {}
 NODES_WIDTH = 3
@@ -191,222 +192,6 @@ def rod_tensors(nodes, E, A):
     return Ke, Be, CBe
 
 
-def beam2_tensors_2d(
-    nodes: npt.NDArray[np.float32],
-    E: float,
-    I: float,
-    A: float,
-) -> Tuple[npt.NDArray[np.float32], npt.NDArray[np.float32], npt.NDArray[np.float32]]:
-    """
-    Compute the stiffness matrix, strain-displacement matrix, and stress-displacement matrix for a 2D beam element.
-
-    Parameters:
-    - nodes: npt.NDArray[np.float32] (2x2), nodal coordinates of the beam in the global frame.
-    - E: float, Young's modulus of the material.
-    - I: float, second moment of area of the beam.
-    - A: float, cross-sectional area of the beam.
-
-    Returns:
-    - Ke: npt.NDArray[np.float32] (4x4), the element stiffness matrix.
-    - Be: npt.NDArray[np.float32] (6x4), the strain-displacement matrix.
-    - CBe: npt.NDArray[np.float32] (6x4), the stress-displacement matrix.
-    """
-    # Validate input
-    if nodes.shape != (2, 2):
-        raise ValueError("nodes must be a 2x2 array containing nodal coordinates.")
-
-    # Compute the length of the beam
-    L = np.linalg.norm(nodes[1, 0] - nodes[0, 0])
-
-    # Compute the stiffness matrix for the beam
-    EI = E * I
-
-    # Local stiffness matrix (2D beam)
-    Ke = (2 * EI / L**3) * np.array(
-        [
-            [6, 3 * L, -6, 3 * L],
-            [3 * L, 2 * L**2, -3 * L, L**2],
-            [-6, -3 * L, 6, -3 * L],
-            [3 * L, L**2, -3 * L, 2 * L**2],
-        ],
-        dtype=np.float32,
-    )
-
-    # Transformation matrix for 2D beam
-    dx = nodes[1, 0] - nodes[0, 0]
-    dy = nodes[1, 1] - nodes[0, 1]
-    theta = np.arctan2(dy, dx)
-    c = np.cos(theta)
-    s = np.sin(theta)
-
-    T = np.array(
-        [[c, s, 0, 0], [-s, c, 0, 0], [0, 0, c, s], [0, 0, -s, c]], dtype=np.float32
-    )
-
-    # Global stiffness matrix
-    Ke_global = T.T @ Ke @ T
-
-    # Strain-displacement matrix (Be)
-    Be = np.zeros((6, 4), dtype=np.float32)
-    Be[0, 0] = -6 / L**2
-    Be[0, 2] = 6 / L**2
-    Be[1, 0] = -3 / L
-    Be[1, 2] = 3 / L
-
-    # Stress-displacement matrix (CBe)
-    CBe = E * Be
-
-    return Ke_global, Be, CBe
-
-
-def test_beam2_tensors():
-    """Test function for the beam2_tensors with assembly of global stiffness matrix."""
-    E = 10_000_000  # Young's modulus in psi
-    I = 5  # Second moment of area in in^4
-    A = 1  # Cross-sectional area in in²
-    force = 1000  # Applied force in lbf
-    n_elements = 10  # Number of beam elements
-
-    # Length of each element
-    total_length = 48.0
-
-    # Global stiffness matrix size (2 DOF per node, n_elements + 1 nodes)
-    n_nodes = n_elements + 1
-    nodes = np.array([[d, 0] for d in np.linspace(0, total_length, n_elements + 1)])
-    elements = [[i, i + 1] for i in range(n_elements)]
-    elements = np.array(elements, dtype=np.int32)
-
-    forces = np.zeros((n_nodes, 2), dtype=np.float32)
-    forces[-1, 0] = -force
-
-    Kg = np.zeros((2 * n_nodes, 2 * n_nodes), dtype=np.float32)
-
-    # Assemble global stiffness matrix
-    for element in elements:
-        # Compute element stiffness matrix
-        Ke, _, _ = beam2_tensors_2d(nodes[element], E, I, A)
-
-        dof_indices = np.array(
-            [node_idx * 2 + j for node_idx in element for j in range(2)]
-        )
-        idx = np.ix_(dof_indices, dof_indices)
-        Kg[idx] += Ke
-
-    # Print global stiffness matrix
-    print("Kg", Kg.shape, Kg, sep="\n")
-
-    constraints = np.array([[0, 0]]).repeat(n_elements + 1, axis=0)
-    constraints[0] = np.array([1, 1])
-
-    free_dofs = np.where(constraints.flatten() == 0)[0]
-
-    K = Kg[np.ix_(free_dofs, free_dofs)]
-    print("K_reduced", K.shape, K, sep="\n")
-    f = forces.flatten()[free_dofs]
-
-    u = np.linalg.solve(K, f)
-    displacements = np.zeros_like(nodes).flatten()
-    displacements[free_dofs] = u
-    displacements = displacements.reshape(nodes.shape)
-    forces = (Kg @ displacements.flatten()).reshape(nodes.shape)
-    print("displacements", displacements.shape, displacements, sep="\n")
-    print("forces", forces.shape, forces, sep="\n")
-
-
-@ElementType.register_tensor_functions
-def beam2_tensors_3d(
-    nodes: npt.NDArray[np.float32],
-    E: float,
-    nu: float,
-    A: float,
-    I: npt.NDArray[np.float32],
-    J: float,
-) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float32], npt.NDArray[np.float32]]:
-    """
-    Compute the stiffness matrix, strain-displacement matrix, and stress-displacement matrix for a 3D beam element.
-
-    Parameters:
-    - nodes: npt.NDArray[np.float32] (2x6), nodal coordinates in the global frame.
-    - E: float, Young's modulus of the material.
-    - nu: float, Poisson's ratio of the material.
-    - A: float, cross-sectional area of the beam.
-    - I: npt.NDArray[np.float32] (3,), Second moments of area about principal axes (Ix, Iy, Iz).
-    - J: float, Torsional constant of the beam.
-
-    Returns:
-    - Ke_global: npt.NDArray[np.float64] (12x12), the global stiffness matrix.
-    - Be: npt.NDArray[np.float32] (6x12), the strain-displacement matrix.
-    - CBe: npt.NDArray[np.float32] (6x12), the stress-displacement matrix.
-    """
-    G = E / (2 * (1 + nu))  # Shear modulus
-
-    # Extract nodal coordinates
-    x1, y1, z1 = nodes[0, :3]
-    x2, y2, z2 = nodes[1, :3]
-
-    # Compute beam length
-    L = np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2 + (z2 - z1) ** 2)
-
-    # Direction cosines
-    l = (x2 - x1) / L
-    m = (y2 - y1) / L
-    n = (z2 - z1) / L
-
-    # Transformation matrix
-    T = np.zeros((12, 12), dtype=np.float64)
-    T[:3, :3] = T[3:6, 3:6] = T[6:9, 6:9] = T[9:12, 9:12] = np.array(
-        [[l, m, n], [-m, l, 0], [-n, 0, l]]
-    )
-
-    # Local stiffness matrix
-    Ke_local = np.zeros((12, 12), dtype=np.float64)
-
-    # Axial stiffness
-    Ke_local[0, 0] = Ke_local[6, 6] = E * A / L
-    Ke_local[0, 6] = Ke_local[6, 0] = -E * A / L
-
-    # Flexural stiffness about y-axis
-    Ke_local[1, 1] = Ke_local[7, 7] = 12 * E * I[1] / L**3
-    Ke_local[1, 7] = Ke_local[7, 1] = -12 * E * I[1] / L**3
-    Ke_local[5, 1] = Ke_local[1, 5] = Ke_local[5, 7] = Ke_local[7, 5] = (
-        6 * E * I[1] / L**2
-    )
-
-    # Flexural stiffness about z-axis
-    Ke_local[2, 2] = Ke_local[8, 8] = 12 * E * I[2] / L**3
-    Ke_local[2, 8] = Ke_local[8, 2] = -12 * E * I[2] / L**3
-    Ke_local[4, 2] = Ke_local[2, 4] = Ke_local[4, 8] = Ke_local[8, 4] = (
-        -6 * E * I[2] / L**2
-    )
-
-    # Torsional stiffness
-    Ke_local[3, 3] = Ke_local[9, 9] = G * J / L
-    Ke_local[3, 9] = Ke_local[9, 3] = -G * J / L
-
-    # Strain-displacement matrix (Be)
-    Be = np.zeros((6, 12), dtype=np.float32)
-    Be[0, 0] = -1 / L
-    Be[0, 6] = 1 / L
-
-    # Flexural strains (y-axis bending)
-    Be[1, 1] = Be[1, 7] = 12 / L**3
-    Be[1, 5] = Be[1, 11] = 6 / L**2
-
-    # Flexural strains (z-axis bending)
-    Be[2, 2] = Be[2, 8] = 12 / L**3
-    Be[2, 4] = Be[2, 10] = -6 / L**2
-
-    # Stress-displacement matrix (CBe)
-    CBe = Be.copy()
-
-    # Transform stiffness matrix to global coordinates
-    Ke_global = T.T @ Ke_local @ T
-
-    print("Ke_global", Ke_global.shape, Ke_global, sep="\n")
-
-    return Ke_global, Be, CBe
-
-
 @ElementType.register_tensor_functions
 def hex8_tensors(nodes, E, nu):
     """
@@ -534,214 +319,129 @@ def hex8_tensors(nodes, E, nu):
     return Ke, Be, CBe
 
 
-# @ElementType.register_tensor_functions
-# def prism6_tensors(nodes, E, nu):
-#     """
-#     Compute the stiffness matrix for a 6-node prismatic element.
+@ElementType.register_tensor_functions
+def beam2_tensors(nodes, E, nu, Iyy, Izz, A, J, theta):
+    """
+    Generate the 12x12 stiffness matrix for a 2D beam element embedded in 3D space with 6 DOFs per node.
 
-#     Parameters:
-#     - nodes: npt.NDArray[np.float32] (6x3), nodal coordinates of the prism in the global frame.
-#     - E: float, Young's modulus of the material.
-#     - nu: float, Poisson's ratio of the material.
+    Parameters:
+    nodes : np.array - [[u0, v0, w0], [θx0, θy0, θz0], [u1, v1, w1], [θx1, θy1, θz1]]
+        Coordinates of the beam element's start and end nodes in 3D space.
+    E : float - Young's modulus of the material
+    nu : float - Poisson's ratio
+    I : float - Moment of inertia of the cross-section
+    A : float - Cross-sectional area
+    J : float - Polar moment of inertia
+    theta : float - Angle of rotation about the x-axis before rodriguez rotation
 
-#     Returns:
-#     - Ke: npt.NDArray[np.float32] (18x18), the element stiffness matrix.
-#     - Be: npt.NDArray[np.float32] (6x18), the strain-displacement matrix.
-#     - CBe: npt.NDArray[np.float32] (6x18), the stress-displacement matrix.
-#     """
+    Returns:
+    - Ke: npt.NDArray[np.float32] (12x12), the element stiffness matrix.
+    - Be: npt.NDArray[np.float32] (6x12), the strain-displacement matrix.
+    - CBe: npt.NDArray[np.float32] (6x12), the stress-displacement matrix.
+    """
+    K_local = np.zeros((12, 12))
 
-#     # Gauss quadrature points and weights (2-point rule)
-#     gauss_points = np.array([-1 / np.sqrt(3), 1 / np.sqrt(3)])
-#     weights = np.array([1, 1])
+    G = E / (2 * (1 + nu))  # Shear modulus
+    p0, r0, p1, r1 = nodes
 
-#     # Material stiffness matrix (3D isotropic elasticity)
-#     C = (E / ((1 + nu) * (1 - 2 * nu))) * np.array(
-#         [
-#             [1 - nu, nu, nu, 0, 0, 0],
-#             [nu, 1 - nu, nu, 0, 0, 0],
-#             [nu, nu, 1 - nu, 0, 0, 0],
-#             [0, 0, 0, (1 - 2 * nu) / 2, 0, 0],
-#             [0, 0, 0, 0, (1 - 2 * nu) / 2, 0],
-#             [0, 0, 0, 0, 0, (1 - 2 * nu) / 2],
-#         ],
-#         dtype=np.float32,
-#     )
+    # Calculate the beam length
+    L = np.linalg.norm(p1 - p0)
 
-#     # Initialize stiffness matrix and strain-displacement matrix
-#     Ke = np.zeros((18, 18), dtype=np.float32)
-#     Be = np.zeros((6, 18), dtype=np.float32)
+    # Precompute stiffness terms
+    EA_L = E * A / L
+    GJ_L = G * J / L
 
-#     # Shape function derivatives in natural coordinates
-#     def shape_function_derivatives(xi, eta, zeta):
-#         """
-#         Computes the derivatives of the shape functions for a prism6 element
-#         with respect to the natural coordinates (xi, eta, zeta).
-#         """
-#         return np.array(
-#             [
-#                 [
-#                     -1 * (1 - eta) * (1 - zeta),
-#                     -1 * (1 - xi) * (1 - zeta),
-#                     -1 * (1 - xi) * (1 - eta),
-#                 ],
-#                 [(1 - eta) * (1 - zeta), -xi * (1 - zeta), -xi * (1 - eta)],
-#                 [eta * (1 - zeta), xi * (1 - zeta), -xi * eta],
-#                 [-eta * (1 - zeta), (1 - xi) * (1 - zeta), -(1 - xi) * eta],
-#                 [-(1 - eta) * zeta, -(1 - xi) * zeta, (1 - xi) * (1 - eta)],
-#                 [(1 - eta) * zeta, -xi * zeta, xi * (1 - eta)],
-#             ]
-#         ).T
+    # Local stiffness matrix (12x12 for 3D beam element)
+    K_local = np.zeros((12, 12))
 
-#     # Loop over Gauss points
-#     for i, xi_pt in enumerate(gauss_points):
-#         for j, eta_pt in enumerate(gauss_points):
-#             for k, zeta_pt in enumerate(gauss_points):
-#                 # Gauss point weight
-#                 weight = weights[i] * weights[j] * weights[k]
+    # Axial stiffness
+    K_local[0, 0] = K_local[6, 6] = EA_L
+    K_local[0, 6] = K_local[6, 0] = -EA_L
 
-#                 # Shape function derivatives in natural coordinates
-#                 dN_dxi = shape_function_derivatives(xi_pt, eta_pt, zeta_pt)
-#                 np_print("dN_dxi", dN_dxi)
-#                 np_print("nodes", nodes)
+    # Torsional stiffness
+    K_local[3, 3] = K_local[9, 9] = GJ_L
+    K_local[3, 9] = K_local[9, 3] = -GJ_L
 
-#                 # Jacobian matrix
-#                 J = dN_dxi @ nodes
-#                 detJ = np.linalg.det(J)
+    L2 = L * L
+    L3 = L2 * L
+    # Precompute the terms involving powers of L
+    term1 = 6 / L3
+    term2 = 3 / L2
+    term3 = 1 / L
+    term4 = 2 / L
 
-#                 if detJ <= 0:
-#                     np_print("dN_dxi", dN_dxi)
-#                     np_print("J", J)
-#                     np_print("detJ", detJ)
-#                     raise ValueError(
-#                         "Jacobian determinant is non-positive. Check the element shape."
-#                     )
+    # Bending stiffness (xy plane)
+    K_local[np.ix_([1, 5, 7, 11], [1, 5, 7, 11])] = (2 * E * Iyy) * np.array(
+        [
+            [term1, term2, -term1, term2],
+            [term2, term4, -term2, term3],
+            [-term1, -term2, term1, -term2],
+            [term2, term3, -term2, term4],
+        ],
+        dtype=np.float32,
+    )
 
-#                 # Inverse Jacobian
-#                 J_inv = np.linalg.inv(J)
+    # Bending stiffness (xz plane)
+    z_nodes = np.zeros((2, 2), dtype=np.float32)
+    z_nodes[0, 0] = nodes[0, 2]  # d is z along the beam axis 0 0 X
+    z_nodes[0, 1] = nodes[1, 1]  # rotation about y           0 X 0
+    z_nodes[1, 0] = nodes[2, 2]  # d is z along the beam axis 0 0 X
+    z_nodes[1, 1] = nodes[3, 1]  # rotation about y           0 X 0
+    K_local[np.ix_([2, 4, 8, 10], [2, 4, 8, 10])] = (2 * E * Izz) * np.array(
+        [
+            [term1, term2, -term1, term2],
+            [term2, term4, -term2, term3],
+            [-term1, -term2, term1, -term2],
+            [term2, term3, -term2, term4],
+        ],
+        dtype=np.float32,
+    )
 
-#                 # Shape function derivatives in global coordinates
-#                 dN_dx = J_inv @ dN_dxi
+    ctheta, stheta = np.cos(theta), np.sin(theta)
 
-#                 # Strain-displacement matrix B
-#                 B = np.zeros((6, 18), dtype=np.float32)
-#                 for n in range(6):  # Loop over nodes
-#                     B[0, n * 3] = dN_dx[0, n]  # ε_xx
-#                     B[1, n * 3 + 1] = dN_dx[1, n]  # ε_yy
-#                     B[2, n * 3 + 2] = dN_dx[2, n]  # ε_zz
-#                     B[3, n * 3] = dN_dx[1, n]  # γ_xy
-#                     B[3, n * 3 + 1] = dN_dx[0, n]
-#                     B[4, n * 3 + 1] = dN_dx[2, n]  # γ_yz
-#                     B[4, n * 3 + 2] = dN_dx[1, n]
-#                     B[5, n * 3] = dN_dx[2, n]  # γ_zx
-#                     B[5, n * 3 + 2] = dN_dx[0, n]
+    R_x = np.array([[1, 0, 0], [0, ctheta, -stheta], [0, stheta, ctheta]])
 
-#                 # Stiffness matrix contribution
-#                 Ke += weight * B.T @ C @ B * detJ
+    # 1. Primary axis direction vector: p1 - p0 (this defines the beam's axis)
+    beam_axis = p1 - p0
+    beam_axis = beam_axis / np.linalg.norm(beam_axis)  # Normalize it
 
-#                 # Strain-displacement matrix contribution
-#                 Be += weight * B * detJ
+    l, m, n = beam_axis
 
-#     # Compute stress-displacement matrix
-#     CBe = C @ Be
+    # Transformation matrix
+    T = np.zeros((12, 12), dtype=np.float64)
+    T[:3, :3] = T[3:6, 3:6] = T[6:9, 6:9] = T[9:12, 9:12] = np.array(
+        [[l, m, n], [-m, l, 0], [-n, 0, l]]
+    )
+    # Apply additional rotation around the x-axis
+    T[:3, :3] = np.dot(
+        R_x, T[:3, :3]
+    )  # Apply additional rotation to the translation part
+    T[3:6, 3:6] = np.dot(
+        R_x, T[3:6, 3:6]
+    )  # Apply additional rotation to the rotation part
+    T[6:9, 6:9] = np.dot(
+        R_x, T[6:9, 6:9]
+    )  # Apply additional rotation to the translation part
+    T[9:, 9:] = np.dot(R_x, T[9:, 9:])  # Apply additional rotation to the rotation part
 
-#     return Ke, Be, CBe
+    # Apply the transformation to the local stiffness matrix
+    K_global = T.T @ K_local @ T
 
-#     def shape_function_derivatives(xi, eta, zeta):
-#         """
-#         Compute the derivatives of the shape functions for a 6-node prism element
-#         in the natural coordinate system (ξ, η, ζ).
+    # Compute strain-displacement matrix Be
+    Be = np.zeros((6, 12), dtype=np.float32)
 
-#         Parameters:
-#         - xi: float, natural coordinate along the triangular base.
-#         - eta: float, natural coordinate along the triangular base.
-#         - zeta: float, natural coordinate along the height (0 to 1).
+    # Strain-displacement matrix based on beam theory
+    Be[0, 0] = Be[0, 6] = -6 / L**2
+    Be[0, 2] = Be[0, 8] = 6 / L**2
+    Be[1, 1] = Be[1, 7] = -3 / L
+    Be[1, 3] = Be[1, 9] = 3 / L
+    Be[2, 4] = Be[2, 10] = 1
+    Be[2, 5] = Be[2, 11] = -1
 
-#         Returns:
-#         - dN_dxi: npt.NDArray[np.float32], derivatives of shape functions with respect to ξ, η, ζ.
-#         """
-#         # Derivatives with respect to xi, eta, and zeta
-#         dN_dxi = np.array(
-#             [
-#                 # dN/dξ (xi direction)
-#                 [
-#                     -(1 - eta) * (1 - zeta),
-#                     (1 - eta) * (1 - zeta),
-#                     eta * (1 - zeta),
-#                     -(1 - eta) * zeta,
-#                     (1 - eta) * zeta,
-#                     eta * zeta,
-#                 ],
-#                 # dN/dη (eta direction)
-#                 [
-#                     -(1 - xi) * (1 - zeta),
-#                     -xi * (1 - zeta),
-#                     xi * (1 - zeta),
-#                     -(1 - xi) * zeta,
-#                     -xi * zeta,
-#                     xi * zeta,
-#                 ],
-#                 # dN/dζ (zeta direction, height direction)
-#                 [
-#                     -(1 - xi) * (1 - eta),
-#                     -(1 - xi) * eta,
-#                     xi * eta,
-#                     (1 - xi) * (1 - eta),
-#                     (1 - xi) * eta,
-#                     xi * eta,
-#                 ],
-#             ],
-#             dtype=np.float32,
-#         )
+    # Compute stress-displacement matrix CBe
+    CBe = E * Be
 
-#         # Scale the derivatives for the natural coordinates
-#         dN_dxi /= 8.0
-#         return dN_dxi
-
-#     # Loop over Gauss points
-#     for i, xi_pt in enumerate(gauss_points):
-#         for j, eta_pt in enumerate(gauss_points):
-#             for k, zeta_pt in enumerate(gauss_points):
-#                 # Gauss point weight
-#                 weight = weights[i] * weights[j] * weights[k]
-
-#                 # Shape function derivatives in natural coordinates
-#                 dN_dxi = shape_function_derivatives(xi_pt, eta_pt, zeta_pt)
-
-#                 # Jacobian matrix
-#                 J = dN_dxi @ nodes
-#                 detJ = np.linalg.det(J)
-#                 if detJ <= 0:
-#                     raise ValueError(
-#                         "Jacobian determinant is non-positive. Check the element shape."
-#                     )
-
-#                 # Inverse Jacobian
-#                 J_inv = np.linalg.inv(J)
-
-#                 # Shape function derivatives in global coordinates
-#                 dN_dx = J_inv @ dN_dxi
-
-#                 # Strain-displacement matrix
-#                 B = np.zeros((6, 18), dtype=np.float32)
-#                 for n in range(6):  # Loop over nodes
-#                     B[0, n * 3] = dN_dx[0, n]  # ε_xx
-#                     B[1, n * 3 + 1] = dN_dx[1, n]  # ε_yy
-#                     B[2, n * 3 + 2] = dN_dx[2, n]  # ε_zz
-#                     B[3, n * 3] = dN_dx[1, n]  # γ_xy
-#                     B[3, n * 3 + 1] = dN_dx[0, n]
-#                     B[4, n * 3 + 1] = dN_dx[2, n]  # γ_yz
-#                     B[4, n * 3 + 2] = dN_dx[1, n]
-#                     B[5, n * 3] = dN_dx[2, n]  # γ_xz
-#                     B[5, n * 3 + 2] = dN_dx[0, n]
-
-#                 # Correctly assemble stiffness and strain-displacement matrices
-#                 Ke += weight * B.T @ C @ B * detJ
-#                 Be += weight * B * detJ
-
-#     # Stress-displacement matrix
-#     CBe = C @ Be
-
-#     return Ke, Be, CBe
+    return K_global, Be, CBe
 
 
 @ElementType.register_tensor_functions
@@ -1002,8 +702,8 @@ class FEAModel:
         if self.forces is None:
             self.forces = np.zeros((self.nodes.shape), dtype=np.float32)
         else:
-            self.forces = self._normalize_repeat_array(
-                self.forces, "forces", np.float32, (-1, NODES_WIDTH)
+            self.forces = np.asarray(self.forces, dtype=np.float32).reshape(
+                (-1, NODES_WIDTH)
             )
 
         if self.displacement_vector is None:
@@ -1028,7 +728,7 @@ class FEAModel:
         x = np.asarray(x, dtype=dtype).reshape(shape)
         if self.num_elements % x.shape[0] != 0:
             raise ValueError(
-                f"The size of {name} must be a divisor of the number of elements."
+                f"The size of {name} (shape={x.shape}) must be a divisor of the number of elements ({self.num_elements})."
             )
         return np.repeat(x, self.num_elements // x.size)
 
@@ -1065,7 +765,9 @@ class FEAModel:
                     data.append(Ke[i, j])
 
         # Create the CSR matrix directly
-        self.Kg = csr_matrix((data, (rows, cols)), shape=(self.num_dofs, self.num_dofs))
+        self.Kg = scipy.sparse.csr_matrix(
+            (data, (rows, cols)), shape=(self.num_dofs, self.num_dofs)
+        )
         debug_print(
             f"Memory usage of Kg as csr_matrix: {self.Kg.data.nbytes / 1024} kb"
         )
@@ -1106,6 +808,9 @@ class FEAModel:
             f"End of stiffness matrix assembly, elapsed time: {time.time() - start}"
         )
 
+        assert self.forces.shape == self.nodes.shape
+        assert self.constraints_vector.shape == self.nodes.shape
+
         # Determine free degrees of freedom
         free_dofs = np.where(self.constraints_vector.flatten() == 0)[0]
 
@@ -1123,13 +828,13 @@ class FEAModel:
         if use_iterative_solver:
             # Iterative solver (Conjugate Gradient)
             debug_print("Using iterative solver (Conjugate Gradient)")
-            u, info = cg(K, f, **args)
+            u, info = scipy.sparse.linalg.cg(K, f, **args)
             if info != 0:
                 raise ValueError(f"Conjugate Gradient did not converge, info: {info}")
         else:
             # Direct solver
-            debug_print("Using direct solver (spsolve)")
-            u = spsolve(K, f)
+            debug_print("Using direct solver (scipy.sparse.linalg.spsolve)")
+            u = scipy.sparse.linalg.spsolve(K, f)
 
         debug_print(f"End of solve, elapsed time: {time.time() - start}")
 
@@ -1187,16 +892,18 @@ class FEAModel:
                     "Jacobi preconditioner failed: matrix has zero diagonal entries."
                 )
 
-            # Create the preconditioner as a LinearOperator
-            M = LinearOperator(K.shape, matvec=lambda x: x / diag, dtype=np.float32)
+            # Create the preconditioner as a scipy.sparse.linalg.LinearOperator
+            M = scipy.sparse.linalg.LinearOperator(
+                K.shape, matvec=lambda x: x / diag, dtype=np.float32
+            )
 
-            u, info = cg(K, f, M=M, **args)
+            u, info = scipy.sparse.linalg.cg(K, f, M=M, **args)
             if info != 0:
                 raise ValueError(f"Conjugate Gradient did not converge, info: {info}")
         else:
             # Direct solver
-            debug_print("Using direct solver (spsolve)")
-            u = spsolve(K, f)
+            debug_print("Using direct solver (scipy.sparse.linalg.spsolve)")
+            u = scipy.sparse.linalg.spsolve(K, f)
 
         debug_print(f"End of solve, elapsed time: {time.time() - start}")
 
@@ -1269,9 +976,15 @@ class FEAModel:
             ElementType.COUPLED_FIELD: pv.CellType.EMPTY_CELL,
             ElementType.EMBEDDED: pv.CellType.EMPTY_CELL,
         }
-        cells = [[len(element), *element] for element in self.elements]
-        cells = [item for sublist in cells for item in sublist]
-        cell_type = [cell_type_map[cell_type] for cell_type in self.element_type]
+        cells = []
+        cell_type = []
+        for element, element_type in zip(self.elements, self.element_type):
+            if element_type not in cell_type_map:
+                raise ValueError(f"Unknown element type: {element_type}")
+            if element_type == ElementType.BEAM2:
+                element = [element[0], element[2]]
+            cells.extend([[len(element), *element]])
+            cell_type.extend([cell_type_map[element_type]])
         points = (
             self.nodes + self.displacement_vector * displacement_scale
         )  # TODO figure out a better way for amplifying displacements for rendering
@@ -1367,18 +1080,26 @@ class FEAModel:
         Returns:
         - arrows: pyvista.PolyData, arrows representing the forces.
         """
+        linear_nodes = np.ones((self.nodes.shape[0],), dtype=np.bool)
+        for element, element_type in zip(self.elements, self.element_type):
+            # Exclude rotational DOFs
+            if element_type == ElementType.BEAM2:
+                linear_nodes[[element[1], element[3]]] = False
+
+        nodes = self.nodes[linear_nodes]
+        forces = self.forces[linear_nodes]
         # Calculate the bounding box dimensions
-        min_coords = np.min(self.nodes, axis=0)
-        max_coords = np.max(self.nodes, axis=0)
+        min_coords = np.min(nodes, axis=0)
+        max_coords = np.max(nodes, axis=0)
         bounding_box_dims = max_coords - min_coords
         max_dim = np.max(bounding_box_dims)
 
         # Calculate the scaling factor based on the maximum force and max_size
-        max_force = np.max(np.linalg.norm(self.forces, axis=1))
+        max_force = np.max(np.linalg.norm(forces, axis=1))
         scale_factor = max_size * max_dim / max_force
 
         # Create arrows
-        arrows = self._gen_pv_arrows(self.nodes, self.forces, mag=scale_factor)
+        arrows = self._gen_pv_arrows(nodes, forces, mag=scale_factor)
 
         return arrows
 
