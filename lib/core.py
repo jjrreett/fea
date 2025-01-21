@@ -744,6 +744,7 @@ class FEAModel:
             desc="Assembling global tensors",
         ):
             if element_type == ElementType.RIGID:
+                self.element_tensors.append((None, None, None))
                 continue
             element_tensor = ElementType.element_tensors(
                 element_type, self.nodes[element], *properties
@@ -777,9 +778,19 @@ class FEAModel:
     def compute_element_strain_stress(self):
         self.element_strains = np.zeros((self.num_elements, 6), dtype=np.float32)
         self.element_stresses = np.zeros((self.num_elements, 6), dtype=np.float32)
-        for i, element in enumerate(self.elements):
+        for i, (element, element_type) in enumerate(
+            zip(self.elements, self.element_type)
+        ):
+            if element_type == ElementType.RIGID:
+                continue
             _, Be, CBe = self.element_tensors[i]
             u = self.displacement_vector[element].flatten()
+            assert (
+                u.shape[0] == Be.shape[1]
+            ), f"element_type={element_type} u.shape={u.shape}, Be.shape={Be.shape}"
+            assert (
+                u.shape[0] == CBe.shape[1]
+            ), f"u.shape={u.shape}, CBe.shape={CBe.shape}"
             self.element_strains[i] = Be @ u
             self.element_stresses[i] = CBe @ u
 
@@ -1091,11 +1102,17 @@ class FEAModel:
                 raise ValueError(f"Unknown element type: {element_type}")
             if element_type == ElementType.BEAM2:
                 element = [element[0], element[2]]
-            cells.extend([[len(element), *element]])
+            if element_type == ElementType.RIGID:
+                continue
+            cells.extend([len(element), *element])
             cell_type.extend([cell_type_map[element_type]])
         points = (
             self.nodes + self.displacement_vector * displacement_scale
         )  # TODO figure out a better way for amplifying displacements for rendering
+
+        print("cells", cells, sep="\n")
+        print("cell_type", cell_type, sep="\n")
+        print("points", points.shape, points, sep="\n")
 
         # Create the spatial reference
         grid = pv.UnstructuredGrid(cells, cell_type, points)
@@ -1105,8 +1122,8 @@ class FEAModel:
                 self.displacement_vector, axis=1
             )
 
-        if self.von_mises_stress is not None:
-            grid.cell_data["von_mises_stress"] = self.von_mises_stress
+        # if self.von_mises_stress is not None:
+        #     grid.cell_data["von_mises_stress"] = self.von_mises_stress
 
         return grid
 

@@ -575,11 +575,21 @@ def callback_maker(iters=10):
     return callback
 
 
-feamesh.solve(use_iterative_solver=True, callback=callback_maker(100), rtol=1e-4)
+feamesh.solve(
+    use_iterative_solver=True,
+    callback=callback_maker(100),
+    rtol=1e-4,
+    use_preconditioner=False,
+)
 
 plotter = pv.Plotter()
 m = feamesh.generate_pv_unstructured_mesh()
-plotter.add_mesh(m, scalars="von_mises_stress", cmap="viridis", show_edges=True)
+plotter.add_mesh(
+    m,
+    scalars="displacement",
+    cmap="viridis",
+    show_edges=True,
+)
 m = feamesh.generate_pv_force_arrows()
 # plotter.add_mesh(m)
 plotter.show_grid()
