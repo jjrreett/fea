@@ -853,15 +853,97 @@ def test_beam_distributed_load():
 
     assert np.isclose(dy, fea.displacement_vector[n_nodes - 1, 1], atol=1e-1)
 
+def test_shell_bending():
+    # Material and geometric properties
+    E = 10_000_000  # Young's modulus in psi
+    nu = 0.3  # Poisson's ratio
+    force = 100  # Applied force in lbf
+    thickness = 0.05  # Shell thickness in inches
 
-test_truss1()
-test_truss()
-test_cantilever_truss()
-# test_cantilever_beam() # Doesn't work
-test_single_hex8()
-test_cantilever_beam_hex8()
-test_prism6_1elm()
-test_prism6_2elm()
-# tube_prism6()
-test_beam_point_load()
-test_beam_distributed_load()
+    outer_radius = 4.0  # Outer radius in inches
+    height = 10.0  # Beam length in inches
+
+    # Mesh resolution
+    elm_size = 0.5  # Element size in inches
+    n_points = int(ceil(2 * np.pi * outer_radius / elm_size))  # Circumferential divisions
+    n_layers = int(ceil(height / elm_size))  # Longitudinal divisions
+
+    # Node coordinates for a thin-walled tube
+    theta = np.linspace(0, 2 * np.pi, n_points, endpoint=False)
+    nodes = []
+
+    for z in np.linspace(0, height, n_layers + 1):  # Layer along the beam height
+        layer_nodes = [[outer_radius * np.cos(t), outer_radius * np.sin(t), z] for t in theta]
+        for node in layer_nodes:
+            nodes.append(node)  # Add translational DOF node
+            nodes.append([0.0, 0.0, 0.0])  # Add rotational DOF placeholder
+
+    nodes = np.array(nodes)
+
+    # Element connectivity for 4-node quadrilateral shell elements
+    elements = []
+    for layer in range(n_layers):
+        for i in range(n_points):
+            first_point_in_layer = layer * n_points * 2
+            n0 = first_point_in_layer + i * 2
+            n1 = first_point_in_layer + ((i + 1) % n_points) * 2  # Wrap around
+            n2 = n0 + n_points * 2
+            n3 = n1 + n_points * 2
+            elements.append([n0, n1, n3, n2])  # Counter-clockwise quad definition
+
+    elements = np.array(elements)
+
+    # Thickness vector (magnitude and direction for each node)
+    thickness_vector = np.array([[thickness, 0.0, 0.0]] * 4)
+
+    # Boundary conditions: fix the bottom layer of the tube
+    constraints = np.zeros(nodes.shape, dtype=np.int8)
+    constraints[:n_points * 2:2, :] = 1  # Fix translational DOFs of the bottom layer
+    constraints[:n_points * 2:2, 3:] = 1  # Fix rotational DOFs of the bottom layer
+
+    # Create the FEA model
+    fea = core.FEAModel(
+        nodes=nodes,
+        elements=elements,
+        element_type=[core.ElementType.SHELL],
+        element_properties=[[E, nu, thickness_vector]],  # Pass material properties and thickness vector
+        constraints_vector=constraints,
+    )
+
+    # Apply a distributed load to the top layer in the negative Y direction
+    top_layer_start = n_points * n_layers * 2
+    fea.forces[top_layer_start:top_layer_start + n_points * 2:2, 1] = -force / n_points
+
+    # Solve the model
+    fea.solve(use_iterative_solver=True)
+
+    # Visualization with PyVista
+    plotter = pv.Plotter()
+    m = fea.generate_pv_unstructured_mesh()
+    plotter.add_mesh(m, scalars="von_mises_stress", cmap="viridis", show_edges=True)
+
+    # Add force arrows for visualization
+    m = fea.generate_pv_force_arrows()
+    plotter.add_mesh(m, color="red")
+
+    # Add point labels (optional)
+    poly = pv.PolyData(nodes[::2])  # Only label translational nodes
+    poly["id"] = np.arange(len(nodes[::2]))
+    # plotter.add_point_labels(poly, "id")
+
+    plotter.show_grid()
+    plotter.show()
+
+
+# test_truss1()
+# test_truss()
+# test_cantilever_truss()
+# # test_cantilever_beam() # Doesn't work
+# test_single_hex8()
+# test_cantilever_beam_hex8()
+# test_prism6_1elm()
+# test_prism6_2elm()
+# # tube_prism6()
+# test_beam_point_load()
+# test_beam_distributed_load()
+test_shell_bending()

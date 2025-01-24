@@ -577,6 +577,102 @@ def prism6_tensors(
 
     return Ke, Be, CBe
 
+@ElementType.register_tensor_functions
+def shell_tensors(nodes, E, nu, thickness_vector, integration_points=2):
+    """
+    Generate the stiffness matrix for the MITC4 shell element (4-node shell).
+
+    Parameters:
+    nodes : np.array
+        8x3 matrix where each row represents a node. Rows are ordered as:
+        [translation_node0, rotation_node0, translation_node1, rotation_node1, ...].
+    E : float
+        Young's modulus of the material.
+    nu : float
+        Poisson's ratio.
+    thickness_vector : np.array
+        4x3 matrix where each row represents the thickness magnitude and direction at a node.
+    integration_points : int, optional
+        Number of Gauss points for integration (default is 2).
+
+    Returns:
+    - Ke: np.ndarray (24x24), the element stiffness matrix.
+    - Be: np.ndarray (6x24), the strain-displacement matrix.
+    - CBe: np.ndarray (6x24), the stress-displacement matrix.
+    """
+    # Constants
+    num_nodes = 4  # 4 nodes for MITC4
+    dof_per_node = 6  # 3 translations + 3 rotations per node
+    total_dof = num_nodes * dof_per_node  # Total DOFs for the element
+
+    # Initialize outputs
+    Ke = np.zeros((total_dof, total_dof))  # Stiffness matrix
+    Be = np.zeros((6, total_dof))          # Strain-displacement matrix
+    CBe = np.zeros((6, total_dof))         # Stress-displacement matrix
+
+    # Gauss integration points and weights (2x2 quadrature)
+    gauss_points = [
+        (-1 / np.sqrt(3), -1 / np.sqrt(3)),
+        (1 / np.sqrt(3), -1 / np.sqrt(3)),
+        (1 / np.sqrt(3), 1 / np.sqrt(3)),
+        (-1 / np.sqrt(3), 1 / np.sqrt(3))
+    ]
+    weights = [1, 1, 1, 1]
+
+    # Material stiffness matrix (plane stress assumption)
+    C = E / (1 - nu**2) * np.array([
+        [1, nu, 0],
+        [nu, 1, 0],
+        [0, 0, (1 - nu) / 2]
+    ])
+
+    # Loop over Gauss points for numerical integration
+    for gp, weight in zip(gauss_points, weights):
+        xi, eta = gp
+
+        # Shape functions and derivatives in parametric space
+        N = 0.25 * np.array([
+            (1 - xi) * (1 - eta),
+            (1 + xi) * (1 - eta),
+            (1 + xi) * (1 + eta),
+            (1 - xi) * (1 + eta)
+        ])
+
+        dN_dxi = 0.25 * np.array([
+            [-(1 - eta), -(1 - xi)],
+            [(1 - eta), -(1 + xi)],
+            [(1 + eta), (1 + xi)],
+            [-(1 + eta), (1 - xi)]
+        ])
+
+        # Jacobian matrix
+        node_coords = np.array(nodes[::2])  # Extract only translational nodes (x, y, z)
+        J = dN_dxi.T @ node_coords[:, :2]  # Use the x and y coordinates of the translational nodes
+
+        # Inverse Jacobian and derivatives in global coordinates
+        J_inv = np.linalg.inv(J)
+        dN_dx = dN_dxi @ J_inv
+
+        # Assemble B-matrix for strain-displacement relations
+        B_membrane = np.zeros((3, total_dof))
+        for i in range(num_nodes):
+            B_membrane[0, i * dof_per_node] = dN_dx[i, 0]
+            B_membrane[1, i * dof_per_node + 1] = dN_dx[i, 1]
+            B_membrane[2, i * dof_per_node] = dN_dx[i, 1]
+            B_membrane[2, i * dof_per_node + 1] = dN_dx[i, 0]
+
+        # Compute the thickness and its directional contribution at this integration point
+        thickness_at_gp = N @ thickness_vector  # Compute thickness vector at Gauss point
+        t = np.linalg.norm(thickness_at_gp)    # Magnitude of the thickness vector
+
+        # Element stiffness matrix contribution
+        Ke += weight * t * np.dot(B_membrane.T, C @ B_membrane) * np.linalg.det(J)
+
+        # Store strain-displacement and stress-displacement matrices
+        Be += B_membrane
+        CBe += C @ B_membrane
+
+    return Ke, Be, CBe
 
 @dataclass
 class FEAModel:
